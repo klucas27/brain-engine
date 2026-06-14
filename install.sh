@@ -30,6 +30,12 @@ PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
 BINARY="$BIN_DIR/brain"
 
+# ── Claude Code global output styles ──────────────────────────────────────────
+# Installed to ~/.claude/output-styles/ so they appear in the `/config` → Output
+# style menu for every project. Each project still selects which one via /config.
+CLAUDE_STYLES_DIR="$HOME/.claude/output-styles"
+STYLE_FILES=(brain-eco.md brain-eco-ultra.md)
+
 # ── Uninstall path ────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--uninstall" ]]; then
     if [[ -f "$BINARY" ]]; then
@@ -43,6 +49,12 @@ if [[ "${1:-}" == "--uninstall" ]]; then
         rm -f "$DAEMON_BIN"
         ok "Removed $DAEMON_BIN"
     fi
+    for f in "${STYLE_FILES[@]}"; do
+        if [[ -f "$CLAUDE_STYLES_DIR/$f" ]]; then
+            rm -f "$CLAUDE_STYLES_DIR/$f"
+            ok "Removed $CLAUDE_STYLES_DIR/$f"
+        fi
+    done
     exit 0
 fi
 
@@ -81,6 +93,19 @@ install -m 0755 "$BUILT_DAEMON" "$BIN_DIR/brain-daemon"
 ok "Installed: $BINARY"
 ok "Installed: $BIN_DIR/brain-daemon"
 
+# ── Install global Claude Code output styles ──────────────────────────────────
+info "Installing economic output styles to $CLAUDE_STYLES_DIR…"
+mkdir -p "$CLAUDE_STYLES_DIR"
+for f in "${STYLE_FILES[@]}"; do
+    src="$SCRIPT_DIR/assets/output-styles/$f"
+    if [[ -f "$src" ]]; then
+        install -m 0644 "$src" "$CLAUDE_STYLES_DIR/$f"
+        ok "Installed: $CLAUDE_STYLES_DIR/$f"
+    else
+        warn "Output style not found: $src (skipped)"
+    fi
+done
+
 # ── PATH check ────────────────────────────────────────────────────────────────
 if ! echo ":$PATH:" | grep -q ":$BIN_DIR:"; then
     warn "$BIN_DIR is not in your PATH."
@@ -102,5 +127,10 @@ printf "  brain query \"...\"   # semantic search\n"
 printf "  brain daemon start  # start the background daemon\n"
 printf "  brain install-hooks # wire up Claude Code hooks\n"
 printf "  brain stats         # show usage metrics\n"
+echo
+info "Economic output styles are now available globally in every project."
+info "Pick one per project in Claude Code via /config → Output style:"
+printf "  • Brain Eco        — terse prose, minimal code, token-saving\n"
+printf "  • Brain Eco Ultra  — maximum compression, code-first answers\n"
 echo
 ok "Done. See README.md for full documentation."

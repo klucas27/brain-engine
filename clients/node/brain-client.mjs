@@ -234,6 +234,97 @@ function formatContext(result) {
 }
 
 // ---------------------------------------------------------------------------
+// Eco-mode content compressor (caveman-inspired: drop fluff, keep substance)
+// ---------------------------------------------------------------------------
+
+// Patterns for lines that are purely decorative — never carry code semantics.
+// Matches: `// ====`, `# ---`, `/* ===`, ` * ===`, blank dividers, etc.
+const DECORATIVE_LINE_RE = /^[\s]*(?:\/\/|#|\/\*|\*)[\s=\-*~_]{4,}[\s]*(?:\*\/)?[\s]*$/;
+
+// Matches lines that are *only* whitespace after stripping indent.
+const BLANK_RE = /^\s*$/;
+
+/**
+ * Compress a code chunk's content using caveman-style rules:
+ *   1. Strip trailing whitespace from every line (always safe)
+ *   2. Remove purely decorative comment dividers (// ===, # ---, etc.)
+ *   3. Collapse 3+ consecutive blank lines into one
+ *
+ * Never alters functional code — only structural/visual fluff.
+ *
+ * @param {string} src    - Raw chunk content
+ * @param {boolean} ultra - When true, also strip leading import-only blocks
+ *                          and collapse runs of single-line doc-comments
+ * @returns {string}
+ */
+function compressCode(src, ultra = false) {
+  let lines = src.split('\n');
+
+  // 1. Strip trailing whitespace
+  lines = lines.map(l => l.trimEnd());
+
+  // 2. Drop decorative divider lines
+  lines = lines.filter(l => !DECORATIVE_LINE_RE.test(l));
+
+  // 3. Collapse 3+ consecutive blank lines → 1 blank line (caveman: "fragments OK")
+  const collapsed = [];
+  let blankRun = 0;
+  for (const l of lines) {
+    if (BLANK_RE.test(l)) {
+      blankRun++;
+      if (blankRun <= 2) collapsed.push(l);
+    } else {
+      blankRun = 0;
+      collapsed.push(l);
+    }
+  }
+  lines = collapsed;
+
+  if (ultra) {
+    // Ultra: strip leading import-only blocks (top of file boilerplate)
+    // Find where the first non-import, non-blank line is.
+    const IMPORT_RE = /^[\s]*(import|from|require|use |#include|using |package )/;
+    let firstNonImport = 0;
+    while (firstNonImport < lines.length &&
+           (BLANK_RE.test(lines[firstNonImport]) || IMPORT_RE.test(lines[firstNonImport]))) {
+      firstNonImport++;
+    }
+    // Only strip if the import block is not the entire chunk and occupies >3 lines.
+    if (firstNonImport > 3 && firstNonImport < lines.length) {
+      lines = [`// [${firstNonImport} import lines omitted]`, ...lines.slice(firstNonImport)];
+    }
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
+/**
+ * Eco-mode context formatter — compact plain-text, no fenced blocks.
+ * Applies caveman compression to each chunk: drops decorative dividers,
+ * collapses blank lines, strips trailing whitespace.
+ *
+ * output_style "eco"       → standard compression
+ * output_style "eco-ultra" → also strips import blocks
+ */
+function formatContextEco(result, ultra = false) {
+  if (!result) return '';
+  if (result.cache_hit && result.response) {
+    return `[brain:cache] ${result.response.trim()}\n`;
+  }
+  const chunks = Array.isArray(result.chunks) ? result.chunks : [];
+  if (chunks.length === 0) return '';
+  const body = chunks
+    .map(c => {
+      const header = `[${c.file_path}:${c.start_line}-${c.end_line}]`;
+      const compressed = compressCode(c.content, ultra);
+      const lines = compressed.split('\n').map(l => `  ${l}`).join('\n');
+      return `${header}\n${lines}`;
+    })
+    .join('\n');
+  return `[brain]\n${body}\n`;
+}
+
+// ---------------------------------------------------------------------------
 // Metrics panel
 // ---------------------------------------------------------------------------
 
@@ -261,14 +352,45 @@ function paint(code, s) {
   return COLOR_ENABLED ? `${code}${s}${C.reset}` : String(s);
 }
 
+/** Read brain.config.json (best-effort), returns {} on any error. */
+function readProjectConfig(root) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, 'brain.config.json'), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
 /** Read the configured embedding provider for the Mode label (best-effort). */
 function embeddingProvider(root) {
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(root, 'brain.config.json'), 'utf8'));
-    return (cfg.embedding_provider || 'local');
-  } catch {
-    return 'local';
-  }
+  return readProjectConfig(root).embedding_provider || 'local';
+}
+
+/**
+ * Returns the brain context-injection style for this project.
+ * This governs how brain compresses the *retrieved context* it injects —
+ * separate from the Claude Code response output style (which lives in
+ * .claude/output-styles/ and is selected via /config).
+ *
+ * Value comes from `output_style` in brain.config.json:
+ *   "rich" (default) | "eco" | "eco-ultra"
+ */
+function outputStyle(root) {
+  return readProjectConfig(root).output_style || 'rich';
+}
+
+/**
+ * Minimal one-line metrics for eco mode — no field labels, no color variants.
+ * Example: `🧠 12ms · +2.1k · 3 chunks · CACHE:HIT`
+ */
+function ecoMetricsPanel(result, elapsedMs) {
+  const r = result || {};
+  const s = r.stats || {};
+  const chunks = Array.isArray(r.chunks) ? r.chunks.length : 0;
+  const cost   = s.real_cost != null ? `+${fmtTokens(s.real_cost)}` : '';
+  const cache  = r.cache_hit ? 'HIT' : 'MISS';
+  const parts  = [`${elapsedMs}ms`, cost, `${chunks}ch`, `C:${cache}`].filter(Boolean);
+  return `🧠 ${parts.join(' · ')}`;
 }
 
 /** Current system CPU load (%) and used RAM (MB), best-effort. */
@@ -329,6 +451,32 @@ function metricsPanel(result, elapsedMs, root, { color = false } = {}) {
 }
 
 /**
+ * Build the `[MODEL ROUTER]` line from a query result's `model_router` object.
+ *
+ * The Rust daemon classifies the prompt (type/complexity/critical) and selects
+ * a model tier by score; we surface that decision inline so the user can see
+ * which model the request *should* go to. Returns null when routing is
+ * disabled (model_router absent/null) so nothing is shown.
+ *
+ * @param {object}  result            - daemon query result.
+ * @param {object}  [opts]
+ * @param {boolean} [opts.color=false]- emit ANSI colors.
+ */
+function modelRouterPanel(result, { color = false } = {}) {
+  const mr = result && result.model_router;
+  if (!mr || !mr.selected_model) return null;
+  const cls = mr.classification || {};
+  const p = color ? paint : (_c, v) => String(v);
+  const parts = [
+    `${p(C.label, 'Type:')} ${p(C.info, cls.type ?? '?')}`,
+    `${p(C.label, 'Complexity:')} ${p(C.info, cls.complexity ?? '?')}`,
+    `${p(C.label, 'Critical:')} ${cls.is_critical ? p(C.warn, 'yes') : 'no'}`,
+    `${p(C.label, 'Model:')} ${p(C.cost, String(mr.selected_model).toUpperCase())}`,
+  ];
+  return `${p(C.brain, '🧭 [MODEL ROUTER]')} ${parts.join(' · ')}`;
+}
+
+/**
  * Build the aggregated session panel by reading today's request log.
  * Returns null if there is nothing to report.
  */
@@ -376,28 +524,44 @@ export async function hookPrompt() {
     const prompt = typeof evt.prompt === 'string' ? evt.prompt : '';
     if (!prompt.trim()) return;
     if (!(await ping(root))) return;           // daemon down → silent no-op
-    const t0  = Date.now();
-    const res = await query(root, prompt);
+
+    const style = outputStyle(root);
+    const eco   = style === 'eco' || style === 'eco-ultra';
+    const ultra = style === 'eco-ultra';
+    const t0    = Date.now();
+    // Eco modes fetch fewer chunks and a smaller token budget to reduce injection cost.
+    const res = await query(root, prompt, eco ? { topK: 3, tokens: 2000 } : {});
     const elapsedMs = Date.now() - t0;
     if (!res || !res.ok) return;
 
-    // Colored panel for the user (systemMessage); plain panel for Claude's
-    // context (additionalContext) so no raw ANSI escapes leak into the prompt.
+    if (eco) {
+      // Eco: single-line metrics, caveman-compressed context, no model-router line.
+      const panel = ecoMetricsPanel(res.result, elapsedMs);
+      const ctx   = formatContextEco(res.result, ultra);
+      const additionalContext = ctx ? `${panel}\n\n${ctx}` : `${panel}\n`;
+      process.stdout.write(JSON.stringify({
+        systemMessage: panel,
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext },
+      }));
+      return;
+    }
+
+    // Rich (default): colored panel, fenced-code context, model-router line.
     const panelColor = metricsPanel(res.result, elapsedMs, root, { color: true });
     const panelPlain = metricsPanel(res.result, elapsedMs, root, { color: false });
+    const routerColor = modelRouterPanel(res.result, { color: true });
+    const routerPlain = modelRouterPanel(res.result, { color: false });
     const ctx   = formatContext(res.result);
     // Belt-and-suspenders: the panel goes into `systemMessage` (rendered to the
     // user inline) AND is prepended to `additionalContext` (so it survives in
     // the transcript / Claude's view even if systemMessage is suppressed).
-    const additionalContext = ctx ? `${panelPlain}\n\n${ctx}` : `${panelPlain}\n`;
-    const out = {
-      systemMessage: panelColor,
-      hookSpecificOutput: {
-        hookEventName: 'UserPromptSubmit',
-        additionalContext,
-      },
-    };
-    process.stdout.write(JSON.stringify(out));
+    const userPanel  = routerColor ? `${panelColor}\n${routerColor}` : panelColor;
+    const plainPanel = routerPlain ? `${panelPlain}\n${routerPlain}` : panelPlain;
+    const additionalContext = ctx ? `${plainPanel}\n\n${ctx}` : `${plainPanel}\n`;
+    process.stdout.write(JSON.stringify({
+      systemMessage: userPanel,
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext },
+    }));
   } catch {
     /* hooks must never crash the prompt */
   }

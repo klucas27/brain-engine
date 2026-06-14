@@ -38,6 +38,8 @@ pub struct GlobalConfig {
     pub decision: DecisionConfig,
     /// Cache behaviour (Phase 6).
     pub cache: CacheConfig,
+    /// Content-based model-tier router (classify prompt → pick opus/sonnet/…).
+    pub model_router: ModelRouterConfig,
     /// Log verbosity: `error` | `warn` | `info` | `debug` | `trace`.
     pub log_level: String,
 }
@@ -50,6 +52,7 @@ impl Default for GlobalConfig {
             default_llm: "claude".to_string(),
             decision: DecisionConfig::default(),
             cache: CacheConfig::default(),
+            model_router: ModelRouterConfig::default(),
             log_level: "info".to_string(),
         }
     }
@@ -82,6 +85,33 @@ impl Default for DecisionConfig {
             memory_high_threshold_mb: 2048,
             large_batch_threshold: 64,
             claude_window_hours: 5,  // matches Claude's ~5 h rate-limit reset cycle
+        }
+    }
+}
+
+/// Configuration for the content-based model router (see [`crate::model_router`]).
+///
+/// The scoring weights themselves live as constants in `model_router.rs`
+/// (they are an algorithm detail). What belongs in user config is the on/off
+/// switch and the domain-specific words that should always flag a request as
+/// *critical* (and thus route to the strongest model).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelRouterConfig {
+    /// When `false`, callers should skip routing and not display the
+    /// `[MODEL ROUTER]` line. The classifier itself is always available.
+    pub enabled: bool,
+    /// Extra words that mark a request as critical, on top of the built-in set
+    /// (e.g. add `"billing"`, `"checkout"` for your domain). Matched
+    /// case-insensitively as substrings.
+    pub critical_keywords: Vec<String>,
+}
+
+impl Default for ModelRouterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            critical_keywords: Vec::new(),
         }
     }
 }
@@ -149,6 +179,13 @@ impl Default for Providers {
 // Project config (<root>/brain.config.json)
 // --------------------------------------------------------------------------
 
+/// Controls how the brain client formats context injected into Claude prompts.
+///
+/// - `"rich"` (default): full fenced-code blocks, coloured metrics panel, model-router line.
+/// - `"eco"`: compact plain-text context, minimal one-line metrics, fewer chunks/tokens.
+///   Eco mode roughly halves the tokens injected per request.
+pub type OutputStyle = String;
+
 /// Per-project configuration committed alongside the project brain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -167,6 +204,10 @@ pub struct ProjectConfig {
     pub max_file_size_bytes: u64,
     /// Chunking parameters used by the indexer (Phase 2).
     pub chunk: ChunkConfig,
+    /// Output style for context injected into Claude prompts.
+    /// `"rich"` (default) or `"eco"` (compact, token-saving).
+    /// Set to `"eco"` in brain.config.json to reduce tokens injected per request.
+    pub output_style: OutputStyle,
 }
 
 impl ProjectConfig {
@@ -190,6 +231,7 @@ impl Default for ProjectConfig {
             version: PROJECT_CONFIG_VERSION,
             project_name: "project".to_string(),
             embedding_provider: "local".to_string(),
+            output_style: "rich".to_string(),
             include_globs: vec!["**/*".to_string()],
             exclude_globs: vec![
                 "**/.git/**".to_string(),

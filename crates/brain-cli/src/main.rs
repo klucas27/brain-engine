@@ -72,6 +72,11 @@ enum Command {
         #[arg(long)]
         no_cache: bool,
     },
+    /// Classify a prompt and show which model tier the router selects.
+    Route {
+        /// The prompt to classify (quote it if it contains spaces).
+        prompt: String,
+    },
     /// Inspect and manage the response cache.
     Cache {
         #[command(subcommand)]
@@ -120,6 +125,7 @@ fn main() -> ExitCode {
             tokens,
             no_cache,
         } => commands::query::run(&root, &query, top_k, tokens, cli.json, no_cache),
+        Command::Route { prompt } => commands::route::run(&root, &prompt, cli.json),
         Command::Cache { action } => commands::cache::run(&root, cli.json, action),
         Command::Daemon { action } => commands::daemon::run(&root, cli.json, action),
         Command::Status => commands::status::run(&root, cli.json),

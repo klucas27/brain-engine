@@ -28,6 +28,7 @@
 //! * [`decision`] — sample CPU/RAM, apply thresholds, choose local vs API embeddings
 //! * [`decision`]   — sample CPU/RAM, apply thresholds, choose local vs API embeddings
 //! * [`router`]     — route LLM requests (DeepSeek vs Claude) based on system load
+//! * [`model_router`] — classify a prompt and pick a model tier (opus/sonnet/…) by score
 //! * [`llm_state`]  — persist rate-limit blocks in `~/.brain/llm_state.json`
 //!
 //! Phase 6 (cache layer):
@@ -49,6 +50,7 @@ pub mod hash;
 pub mod index;
 pub mod llm_state;
 pub mod metrics;
+pub mod model_router;
 pub mod paths;
 pub mod retrieve;
 pub mod router;

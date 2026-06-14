@@ -19,6 +19,7 @@ use brain_core::context;
 use brain_core::db;
 use brain_core::index;
 use brain_core::metrics::{self, RequestMetric};
+use brain_core::model_router;
 use brain_core::paths::{GlobalPaths, ProjectPaths};
 use brain_core::retrieve;
 use brain_core::tokens;
@@ -225,6 +226,11 @@ fn handle_query(
     let session_id = format!("daemon-{}", std::process::id());
     let _ = metrics::ensure_session(&s.conn, &session_id);
 
+    // Content-based model routing (cheap, deterministic). Computed once and
+    // attached to every response shape (cache hit and live retrieval) so the
+    // client can always render the `[MODEL ROUTER]` line. Honors the toggle.
+    let model_router_json = build_model_router_json(&s.global_cfg.model_router, query_text);
+
     // Exact cache lookup before paying the embedding cost.
     if !no_cache {
         let hit = cache::lookup(
@@ -247,10 +253,11 @@ fn handle_query(
                 },
             );
             return Ok(serde_json::json!({
-                "cache_hit":  true,
-                "cache_kind": kind.as_str(),
-                "response":   response,
-                "chunks":     [],
+                "cache_hit":    true,
+                "cache_kind":   kind.as_str(),
+                "response":     response,
+                "chunks":       [],
+                "model_router": model_router_json,
             }));
         }
     }
@@ -280,10 +287,11 @@ fn handle_query(
                 },
             );
             return Ok(serde_json::json!({
-                "cache_hit":  true,
-                "cache_kind": kind.as_str(),
-                "response":   response,
-                "chunks":     [],
+                "cache_hit":    true,
+                "cache_kind":   kind.as_str(),
+                "response":     response,
+                "chunks":       [],
+                "model_router": model_router_json,
             }));
         }
     }
@@ -361,6 +369,7 @@ fn handle_query(
     Ok(serde_json::json!({
         "cache_hit": false,
         "chunks": chunks_json,
+        "model_router": model_router_json,
         "stats": {
             "context_tokens":    ctx.context_tokens,
             "project_tokens":    ctx.project_tokens,
@@ -371,6 +380,21 @@ fn handle_query(
             "dropped_chunks":    ctx.dropped_count,
         }
     }))
+}
+
+/// Build the `model_router` JSON object for a query response, or `null` when
+/// the router is disabled in config. Pure and cheap — safe on the hot path.
+fn build_model_router_json(cfg: &config::ModelRouterConfig, prompt: &str) -> Value {
+    if !cfg.enabled {
+        return Value::Null;
+    }
+    let d = model_router::route(prompt, cfg);
+    serde_json::json!({
+        "selected_model": d.model.as_str(),
+        "classification": d.class,
+        "scores":         d.scores,
+        "reason":         d.reason,
+    })
 }
 
 fn handle_index(s: &mut WorkerState, reindex: bool, no_embed: bool) -> Result<Value, String> {

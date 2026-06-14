@@ -105,6 +105,40 @@ brain --json query "..."              # JSON output
 Returns the most relevant code chunks with file/line citations and a token
 report.
 
+### Model router
+
+```sh
+brain route "what is a closure?"                       # → LOCAL
+brain route "write a function to reverse a string"      # → DEEPSEEK
+brain route "debug this segfault across my modules"     # → SONNET
+brain route "design a scalable payments architecture"   # → OPUS
+brain --json route "..."                                 # JSON output
+```
+
+Classifies a prompt — `type` (faq / code / architecture / text / unknown),
+`complexity`, `has_code`, `is_critical` — then picks a model tier by **score**:
+every model accumulates points from those signals and the highest wins (ties go
+to `sonnet`, the balanced default). Critical requests (security, payments,
+production, …) are a hard guardrail and always route to `opus`.
+
+Classification is **deterministic and local** (no per-prompt LLM call), so it
+adds no latency or cost on the hot path. When the hooks are installed, the same
+decision is shown inline as a `🧭 [MODEL ROUTER]` line under the metrics panel on
+every prompt. Tune it in the global config:
+
+```json
+// ~/.brain/config.json
+{
+  "model_router": {
+    "enabled": true,
+    "critical_keywords": ["billing", "checkout"]
+  }
+}
+```
+
+`critical_keywords` adds domain words that should always flag a request as
+critical (matched case-insensitively, on top of the built-in set).
+
 ### Cache
 
 ```sh

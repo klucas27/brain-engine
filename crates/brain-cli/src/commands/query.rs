@@ -15,6 +15,7 @@ use brain_core::context::{self, Context};
 use brain_core::db;
 use brain_core::llm_state;
 use brain_core::metrics::{self, RequestMetric};
+use brain_core::model_router::{self, ModelDecision};
 use brain_core::paths::{GlobalPaths, ProjectPaths};
 use brain_core::retrieve;
 use brain_core::router;
@@ -105,6 +106,15 @@ pub fn run(
     let is_claude_blocked = llm_state::is_blocked(&llm_state, "claude");
     let route_decision = router::route_live(&global_cfg.decision, None, is_claude_blocked);
     let llm_used = route_decision.route.as_str().to_string();
+
+    // ── Model-tier routing (content-based, deterministic) ────────────
+    // Classify the prompt and pick a model tier (opus/sonnet/…). Cheap and
+    // local; surfaced via the `[MODEL ROUTER]` line. `None` when disabled.
+    let model_decision: Option<ModelDecision> = if global_cfg.model_router.enabled {
+        Some(model_router::route(query_text, &global_cfg.model_router))
+    } else {
+        None
+    };
 
     // ── Cache lookup (before retrieval) ─────────────────────────────
     if !no_cache {
@@ -241,11 +251,23 @@ pub fn run(
     let _ = metrics::record_request(&conn, &project.logs_dir(), &metric);
 
     if json {
-        print_json(query_text, &ctx, retrieval_ms, embedder.model_id());
+        print_json(query_text, &ctx, retrieval_ms, embedder.model_id(), model_decision.as_ref());
     } else {
-        print_human(query_text, &ctx, retrieval_ms, embedder.model_id());
+        print_human(query_text, &ctx, retrieval_ms, embedder.model_id(), model_decision.as_ref());
     }
     Ok(())
+}
+
+/// Render the `[MODEL ROUTER]` block for the human view.
+fn print_model_router(d: &ModelDecision) {
+    let c = &d.class;
+    println!();
+    println!("[MODEL ROUTER]");
+    println!("  Type:           {}", c.req_type);
+    println!("  Complexity:     {}", c.complexity);
+    println!("  Critical:       {}", c.is_critical);
+    println!("  Selected Model: {}", d.model.as_str().to_uppercase());
+    println!("  Reason:         {}", d.reason);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,7 +276,7 @@ pub fn run(
 
 const RULE: &str = "─────────────────────────────────────────────────────────────────────";
 
-fn print_human(query: &str, ctx: &Context, ms: u128, model: &str) {
+fn print_human(query: &str, ctx: &Context, ms: u128, model: &str, route: Option<&ModelDecision>) {
     println!("Query:  {query}");
     println!("Model:  {model}");
     println!();
@@ -294,9 +316,13 @@ fn print_human(query: &str, ctx: &Context, ms: u128, model: &str) {
             ctx.dropped_count
         );
     }
+
+    if let Some(d) = route {
+        print_model_router(d);
+    }
 }
 
-fn print_json(query: &str, ctx: &Context, ms: u128, model: &str) {
+fn print_json(query: &str, ctx: &Context, ms: u128, model: &str, route: Option<&ModelDecision>) {
     let chunks: Vec<serde_json::Value> = ctx
         .chunks
         .iter()
@@ -314,10 +340,20 @@ fn print_json(query: &str, ctx: &Context, ms: u128, model: &str) {
         })
         .collect();
 
+    let model_router_json = route.map(|d| {
+        serde_json::json!({
+            "selected_model": d.model.as_str(),
+            "classification": d.class,
+            "scores":         d.scores,
+            "reason":         d.reason,
+        })
+    });
+
     let value = serde_json::json!({
         "query": query,
         "model": model,
         "chunks": chunks,
+        "model_router": model_router_json,
         "stats": {
             "retrieval_ms": ms,
             "context_tokens": ctx.context_tokens,

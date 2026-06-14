@@ -66,6 +66,10 @@ pub fn run(root: &Path, json: bool) -> Result<()> {
         }
         println!("\nClaude Code will now inject retrieved context automatically.");
         println!("The daemon is started on-demand on the first prompt.");
+        println!("\nEconomic output styles (installed globally by ./install.sh) — pick one per");
+        println!("project in Claude Code via /config → Output style:");
+        println!("  • Brain Eco        — terse prose, minimal code, token-saving");
+        println!("  • Brain Eco Ultra  — maximum compression, code-first answers");
     }
     Ok(())
 }

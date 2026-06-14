@@ -7,5 +7,6 @@ pub mod init;
 pub mod install_hooks;
 pub mod llm;
 pub mod query;
+pub mod route;
 pub mod stats;
 pub mod status;
