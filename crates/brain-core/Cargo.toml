@@ -1,0 +1,29 @@
+[package]
+name = "brain-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core library for Brain Engine: config, paths, scaffolding and metadata database."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rusqlite.workspace = true
+dirs.workspace = true
+ignore.workspace = true
+globset.workspace = true
+rayon.workspace = true
+sha2.workspace = true
+# Phase 3 — vector store (LanceDB is async; we wrap it with a current_thread runtime)
+lancedb.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+tokio.workspace = true
+futures.workspace = true
+# Phase 5 — decision engine & AI router
+sysinfo.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

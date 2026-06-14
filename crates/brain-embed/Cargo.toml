@@ -1,0 +1,13 @@
+[package]
+name = "brain-embed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Embedding backends for Brain Engine: trait definition, local ONNX (fastembed) and provider factory."
+
+[dependencies]
+brain-core = { path = "../brain-core" }
+fastembed.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "brain-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Brain Engine daemon — long-lived process with warm models and a Unix socket API."
+
+[[bin]]
+name = "brain-daemon"
+path = "src/main.rs"
+
+[dependencies]
+brain-core  = { path = "../brain-core" }
+brain-embed = { path = "../brain-embed" }
+serde.workspace       = true
+serde_json.workspace  = true
+rusqlite.workspace    = true
+tokio.workspace       = true
+notify.workspace      = true

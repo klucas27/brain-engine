@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/brain-core",
+    "crates/brain-cli",
+    "crates/brain-embed",
+    "crates/brain-daemon",
+]
+
+[workspace.package]
+version = "0.10.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+authors = ["Brain Engine"]
+repository = "https://github.com/brain-engine/brain-engine"
+keywords = ["ai", "claude", "context", "embeddings", "rag"]
+categories = ["command-line-utilities", "development-tools"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+dirs = "6"
+clap = { version = "4", features = ["derive"] }
+ignore = "0.4"
+globset = "0.4"
+rayon = "1"
+sha2 = "0.10"
+# Phase 3 — embeddings & vector store
+fastembed = "4"
+lancedb = "0.21"
+arrow-array = "55"
+arrow-schema = "55"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "sync", "time", "io-util", "macros", "fs", "signal"] }
+# Phase 7 — daemon & watcher
+notify = "6"
+futures = "0.3"
+# Phase 5 — decision engine & AI router
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = "symbols"
+codegen-units = 1
