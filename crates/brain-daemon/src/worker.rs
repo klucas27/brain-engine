@@ -331,7 +331,8 @@ fn handle_query(
             session_id: Some(session_id),
             response_time_ms: Some(wall_start.elapsed().as_millis() as u64),
             context_tokens_estimated: Some(ctx.context_tokens as i64),
-            tokens_saved_estimated: Some(ctx.tokens_saved as i64),
+            // Stored for reference only; never accumulated (see metrics.rs).
+            tokens_saved_estimated: Some(ctx.theoretical_saved as i64),
             chunks_used: Some(ctx.chunks.len() as i64),
             retrieval_time_ms: Some(retrieval_ms),
             embedding_source: Some("local".into()),
@@ -361,11 +362,13 @@ fn handle_query(
         "cache_hit": false,
         "chunks": chunks_json,
         "stats": {
-            "context_tokens":  ctx.context_tokens,
-            "project_tokens":  ctx.project_tokens,
-            "tokens_saved":    ctx.tokens_saved,
-            "savings_pct":     ctx.savings_pct(),
-            "dropped_chunks":  ctx.dropped_count,
+            "context_tokens":    ctx.context_tokens,
+            "project_tokens":    ctx.project_tokens,
+            "real_cost":         ctx.real_cost(),
+            "theoretical_saved": ctx.theoretical_saved,
+            "reduction_pct":     ctx.reduction_pct(),
+            "efficiency_ratio":  ctx.efficiency_ratio(),
+            "dropped_chunks":    ctx.dropped_count,
         }
     }))
 }

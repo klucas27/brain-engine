@@ -103,16 +103,17 @@ fn print_human(r: &metrics::StatsReport, paths: &ProjectPaths) {
     }
     println!();
 
-    // Token savings
-    if r.total_tokens_saved > 0 || r.total_context_tokens > 0 {
-        println!("  Token savings");
+    // Real token cost (accumulated). The old "tokens saved" figure was a fixed-
+    // baseline theoretical number and is deliberately not summed any more.
+    if r.total_real_tokens > 0 {
+        println!("  Token cost (real)");
         println!(
-            "    context used      {:>12}",
-            fmt_num(r.total_context_tokens)
+            "    total injected    {:>12}",
+            fmt_num(r.total_real_tokens)
         );
         println!(
-            "    tokens saved      {:>12}  (estimated)",
-            fmt_num(r.total_tokens_saved)
+            "    avg per request   {:>12}",
+            fmt_num(r.avg_real_tokens_per_request().round() as i64)
         );
     }
     println!();
@@ -144,8 +145,8 @@ fn print_json(r: &metrics::StatsReport) {
         "cache_hits":            r.cache_hits,
         "cache_hit_rate":        r.cache_hit_rate,
         "avg_latency_ms":        r.avg_latency_ms,
-        "total_tokens_saved":    r.total_tokens_saved,
-        "total_context_tokens":  r.total_context_tokens,
+        "total_real_tokens":     r.total_real_tokens,
+        "avg_real_tokens_per_request": r.avg_real_tokens_per_request(),
         "local_embedding_count": r.local_count,
         "api_embedding_count":   r.api_count,
         "local_embedding_pct":   r.local_pct(),

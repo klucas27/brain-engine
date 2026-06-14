@@ -163,12 +163,29 @@ brain --json stats             # JSON output
 
 Metrics recorded per request:
 - Response time (ms), cache hit/miss
-- Context tokens used, tokens saved (vs. whole-project baseline)
+- Context tokens injected (the **real cost**), efficiency ratio
 - Embedding source (local vs. API)
 - CPU %, RAM (MB) at decision time, decision reason
 
+#### Token metrics: real cost vs. theoretical reduction
+
+Brain Engine reports two *different* token numbers — keep them straight:
+
+| Metric | Meaning | Accumulated? |
+|--------|---------|--------------|
+| **Real cost** (`real_cost` = `context_tokens`) | Tokens actually injected into the prompt this request. This is what you pay for and the figure to optimise against. | ✅ Yes — `brain stats` sums it as `total_real_tokens` and shows an average per request. |
+| **Theoretical reduction** (`reduction_pct`) | How much smaller the injected context is vs. the hypothetical "paste the entire project" baseline. Informative only. | ❌ **Never.** The project size is a fixed baseline, so summing per-request "savings" inflates without bound (you'd "save" more than the project's total size). |
+| **Efficiency ratio** (`efficiency_ratio` = `context / project`) | What fraction of the project had to be used. Lower is better. | ❌ No (per-request gauge). |
+
+> ⚠️ Earlier versions headlined a `Saved: ~98k` figure and **accumulated** it per
+> session. That number was arithmetically correct but conceptually misleading: it
+> compared against a dump that never happens, double-counted the same baseline every
+> request, and ignored that retrieved context is *added* to the prompt. It has been
+> replaced by the real-cost metric above.
+
 Daily JSON logs are appended to `.brain/logs/YYYY-MM-DD.log` and parseable with
-`jq` without needing SQLite.
+`jq` without needing SQLite. The `tokens_saved_estimated` field is still written
+per line (for reference / backward compatibility) but is **not** summed anywhere.
 
 ---
 

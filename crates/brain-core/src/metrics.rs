@@ -132,10 +132,12 @@ pub struct StatsReport {
     pub cache_hit_rate: f64,
     /// Mean request latency in milliseconds (0.0 if no timing data).
     pub avg_latency_ms: f64,
-    /// Sum of `tokens_saved_estimated` across all requests.
-    pub total_tokens_saved: i64,
-    /// Sum of `context_tokens_estimated` across all requests.
-    pub total_context_tokens: i64,
+    /// **Real** token cost accumulated across all requests: the sum of the
+    /// context actually injected into prompts (`SUM(context_tokens_estimated)`).
+    ///
+    /// This replaces the old `total_tokens_saved`, which summed a fixed-baseline
+    /// theoretical figure and produced meaningless inflated totals.
+    pub total_real_tokens: i64,
     /// Requests that used the local embedding backend.
     pub local_count: i64,
     /// Requests that used the remote API embedding backend.
@@ -143,6 +145,15 @@ pub struct StatsReport {
 }
 
 impl StatsReport {
+    /// Mean real token cost per request (0.0 if no requests).
+    pub fn avg_real_tokens_per_request(&self) -> f64 {
+        if self.total_requests == 0 {
+            0.0
+        } else {
+            self.total_real_tokens as f64 / self.total_requests as f64
+        }
+    }
+
     /// Fraction of embedding requests that used the local backend (0.0–1.0).
     pub fn local_pct(&self) -> f64 {
         let total = self.local_count + self.api_count;
@@ -233,26 +244,27 @@ pub fn record_request(conn: &Connection, log_dir: &Path, metric: &RequestMetric)
 
 /// Read and aggregate all recorded requests into a [`StatsReport`].
 pub fn aggregate_stats(conn: &Connection) -> Result<StatsReport> {
+    // NOTE: we deliberately do NOT sum `tokens_saved_estimated` — that column
+    // stores a fixed-baseline theoretical figure and accumulating it is meaningless.
+    // The accumulated metric is the *real* injected cost (`context_tokens_estimated`).
     let report: StatsReport = conn.query_row(
         "SELECT
              COUNT(*)                                                     AS total_requests,
              SUM(cache_hit)                                               AS cache_hits,
              COALESCE(AVG(CAST(response_time_ms AS REAL)), 0.0)           AS avg_latency_ms,
-             COALESCE(SUM(tokens_saved_estimated), 0)                     AS total_tokens_saved,
-             COALESCE(SUM(context_tokens_estimated), 0)                   AS total_context_tokens,
+             COALESCE(SUM(context_tokens_estimated), 0)                   AS total_real_tokens,
              COALESCE(SUM(CASE WHEN embedding_source = 'local' THEN 1 ELSE 0 END), 0) AS local_count,
              COALESCE(SUM(CASE WHEN embedding_source = 'api'   THEN 1 ELSE 0 END), 0) AS api_count
          FROM requests",
         [],
         |r| {
             Ok(StatsReport {
-                total_requests:       r.get(0)?,
-                cache_hits:           r.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                avg_latency_ms:       r.get(2)?,
-                total_tokens_saved:   r.get(3)?,
-                total_context_tokens: r.get(4)?,
-                local_count:          r.get(5)?,
-                api_count:            r.get(6)?,
+                total_requests:    r.get(0)?,
+                cache_hits:        r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                avg_latency_ms:    r.get(2)?,
+                total_real_tokens: r.get(3)?,
+                local_count:       r.get(4)?,
+                api_count:         r.get(5)?,
                 ..Default::default()
             })
         },
@@ -392,7 +404,9 @@ mod tests {
         assert_eq!(stats.total_requests, 1);
         assert_eq!(stats.total_sessions, 1);
         assert_eq!(stats.cache_hits, 0);
-        assert_eq!(stats.total_tokens_saved, 28800);
+        // Real cost = sum of context_tokens_estimated (1200), NOT the theoretical saved.
+        assert_eq!(stats.total_real_tokens, 1200);
+        assert_eq!(stats.avg_real_tokens_per_request(), 1200.0);
         assert_eq!(stats.local_count, 1);
         assert_eq!(stats.api_count, 0);
         assert!((stats.avg_latency_ms - 42.0).abs() < 1.0);

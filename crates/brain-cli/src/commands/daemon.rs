@@ -334,14 +334,21 @@ fn print_query_human(resp: &serde_json::Value) {
             .get("project_tokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let sv = stats
-            .get("savings_pct")
+        let reduction = stats
+            .get("reduction_pct")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let eff = stats
+            .get("efficiency_ratio")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
         println!("{rule}");
-        println!("Token report");
-        println!("  context  {ct} / {pt} project (estimated)");
-        println!("  saved    {sv:.1}%");
+        println!("[Brain Metrics]");
+        println!("  Context injected:             {ct} tokens");
+        println!("  Estimated project size:       {pt} tokens");
+        println!("  Reduction (vs full project):  {reduction:.1}%");
+        println!("  Real cost (added to prompt):  +{ct} tokens");
+        println!("  Efficiency ratio:             {:.1}%", eff * 100.0);
     }
 }
 

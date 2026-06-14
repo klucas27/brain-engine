@@ -172,6 +172,7 @@ mod tests {
             cpu_high_threshold: 80,
             memory_high_threshold_mb: 2048,
             large_batch_threshold: 64,
+            claude_window_hours: 5,
         }
     }
 

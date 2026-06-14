@@ -19,6 +19,8 @@
 
 import net  from 'net';
 import path from 'path';
+import os   from 'os';
+import fs   from 'fs';
 
 const SOCKET_FILE   = 'brain.sock';
 const BRAIN_DIR     = '.brain';
@@ -231,19 +233,140 @@ function formatContext(result) {
   return `## Brain Engine — retrieved context (additive)\n\n${body}\n`;
 }
 
-/** Status line written to stderr so the user can see Brain Engine is active. */
-function statusLine(result) {
-  if (!result) return null;
-  if (result.cache_hit && result.response) return '🧠 brain  cache hit';
-  const n = Array.isArray(result.chunks) ? result.chunks.length : 0;
-  if (n === 0) return null;
-  return `🧠 brain  ${n} chunk${n > 1 ? 's' : ''} injected`;
+// ---------------------------------------------------------------------------
+// Metrics panel
+// ---------------------------------------------------------------------------
+
+/** Compact token formatter: 95844 → "95.8k", 320 → "320". */
+function fmtTokens(n) {
+  if (n == null || Number.isNaN(n)) return '?';
+  if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(n);
+}
+
+// ANSI colors for the user-facing panel. Honors NO_COLOR (https://no-color.org).
+const COLOR_ENABLED = !process.env.NO_COLOR;
+const C = {
+  reset:  '\x1b[0m',
+  dim:    '\x1b[2m',
+  brain:  '\x1b[1m\x1b[38;5;213m', // bold pink — the 🧠 label
+  label:  '\x1b[38;5;245m',        // grey — field labels
+  cost:   '\x1b[1m\x1b[38;5;208m', // bold orange — real cost (the metric that matters)
+  good:   '\x1b[38;5;42m',         // green — reduction / efficiency
+  info:   '\x1b[38;5;75m',         // blue — neutral values
+  warn:   '\x1b[38;5;220m',        // yellow — cache miss / attention
+};
+/** Wrap `s` in color `code` when colors are enabled, else return it plain. */
+function paint(code, s) {
+  return COLOR_ENABLED ? `${code}${s}${C.reset}` : String(s);
+}
+
+/** Read the configured embedding provider for the Mode label (best-effort). */
+function embeddingProvider(root) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(root, 'brain.config.json'), 'utf8'));
+    return (cfg.embedding_provider || 'local');
+  } catch {
+    return 'local';
+  }
+}
+
+/** Current system CPU load (%) and used RAM (MB), best-effort. */
+function systemLoad() {
+  let cpu = 0;
+  try {
+    const cores = os.cpus().length || 1;
+    cpu = Math.min(100, Math.max(0, Math.round((os.loadavg()[0] / cores) * 100)));
+  } catch { /* ignore */ }
+  let ramMb = 0;
+  try { ramMb = Math.round((os.totalmem() - os.freemem()) / 1048576); } catch { /* ignore */ }
+  return { cpu, ramMb };
+}
+
+/**
+ * Build the per-request `[Brain Metrics]` panel from a query result.
+ *
+ * Honest metrics (see context.rs): we headline the **real cost** added to the
+ * prompt, plus the (non-accumulated, informative) theoretical reduction and the
+ * efficiency ratio. The old inflated "Saved" headline is gone.
+ *
+ * @param {object}  result            - daemon query result (chunks, stats, cache_hit).
+ * @param {number}  elapsedMs         - round-trip time measured client-side.
+ * @param {string}  root              - project root (for the Mode label).
+ * @param {object}  [opts]
+ * @param {boolean} [opts.color=false]- emit ANSI colors (only for the user panel).
+ */
+function metricsPanel(result, elapsedMs, root, { color = false } = {}) {
+  const r = result || {};
+  const s = r.stats || {};
+  const chunks = Array.isArray(r.chunks) ? r.chunks.length : 0;
+  const mode   = r.cache_hit ? 'CACHE' : embeddingProvider(root).toUpperCase();
+  const { cpu, ramMb } = systemLoad();
+  // `paint` is a no-op when color is off → identical plain text for additionalContext.
+  const p = color ? paint : (_c, v) => String(v);
+  const eff = s.efficiency_ratio != null ? (s.efficiency_ratio * 100) : null;
+
+  const parts = [
+    `${p(C.label, 'Time:')} ${elapsedMs}ms`,
+    `${p(C.label, 'Context:')} ${p(C.info, fmtTokens(s.context_tokens) + ' tok')}`,
+    // The metric that actually matters: tokens added to the prompt.
+    s.real_cost != null
+      ? `${p(C.label, 'Cost:')} ${p(C.cost, '+' + fmtTokens(s.real_cost))}`
+      : null,
+    s.reduction_pct != null
+      ? `${p(C.label, 'Reduction:')} ${p(C.good, s.reduction_pct + '%')}`
+      : null,
+    eff != null
+      ? `${p(C.label, 'Eff:')} ${p(C.good, eff.toFixed(1) + '%')}`
+      : null,
+    `${p(C.label, 'Chunks:')} ${chunks}`,
+    `${p(C.label, 'Mode:')} ${p(C.info, mode)}`,
+    `${p(C.label, 'Cache:')} ${r.cache_hit ? p(C.good, 'HIT') : p(C.warn, 'MISS')}`,
+    `${p(C.label, 'CPU:')} ${cpu}%`,
+    `${p(C.label, 'RAM:')} ${ramMb}MB`,
+  ].filter(Boolean);
+  return `${p(C.brain, '🧠 [Brain Metrics]')} ${parts.join(' · ')}`;
+}
+
+/**
+ * Build the aggregated session panel by reading today's request log.
+ * Returns null if there is nothing to report.
+ */
+function sessionPanel(root) {
+  try {
+    const day  = new Date().toISOString().slice(0, 10);
+    const file = path.join(root, '.brain', 'logs', `${day}.log`);
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    // Accumulate the REAL injected cost (context_tokens), never the theoretical
+    // saved figure — that baseline is fixed and summing it is meaningless.
+    let n = 0, realTokens = 0, time = 0, hits = 0;
+    for (const l of lines) {
+      let m; try { m = JSON.parse(l); } catch { continue; }
+      n++;
+      realTokens += m.context_tokens_estimated || 0;
+      time       += m.response_time_ms || 0;
+      if (m.cache_hit) hits++;
+    }
+    if (!n) return null;
+    const avgTok = Math.round(realTokens / n);
+    const parts = [
+      `${paint(C.label, 'Requests:')} ${n}`,
+      `${paint(C.label, 'Total context injected:')} ${paint(C.info, '~' + fmtTokens(realTokens) + ' tok')}`,
+      `${paint(C.label, 'Avg per request:')} ${paint(C.cost, '~' + fmtTokens(avgTok) + ' tok')}`,
+      `${paint(C.label, 'Cache:')} ${paint(C.good, hits + '/' + n)} hits`,
+    ];
+    return `${paint(C.brain, '🧠 [Brain Metrics · session]')} ${parts.join(' · ')}`;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * UserPromptSubmit hook entry.
- * Reads the event JSON from stdin, queries the daemon and writes additive
- * context to stdout. Always exits 0; never throws.
+ * Queries the daemon, then emits a JSON payload so the user sees the
+ * `[Brain Metrics]` panel inline (via `systemMessage`) while Claude receives
+ * the retrieved chunks (via `hookSpecificOutput.additionalContext`).
+ * Always exits 0; never throws.
  */
 export async function hookPrompt() {
   try {
@@ -253,15 +376,28 @@ export async function hookPrompt() {
     const prompt = typeof evt.prompt === 'string' ? evt.prompt : '';
     if (!prompt.trim()) return;
     if (!(await ping(root))) return;           // daemon down → silent no-op
+    const t0  = Date.now();
     const res = await query(root, prompt);
-    if (res && res.ok) {
-      const ctx = formatContext(res.result);
-      if (ctx) {
-        process.stdout.write(ctx);
-        const line = statusLine(res.result);
-        if (line) process.stderr.write(line + '\n');
-      }
-    }
+    const elapsedMs = Date.now() - t0;
+    if (!res || !res.ok) return;
+
+    // Colored panel for the user (systemMessage); plain panel for Claude's
+    // context (additionalContext) so no raw ANSI escapes leak into the prompt.
+    const panelColor = metricsPanel(res.result, elapsedMs, root, { color: true });
+    const panelPlain = metricsPanel(res.result, elapsedMs, root, { color: false });
+    const ctx   = formatContext(res.result);
+    // Belt-and-suspenders: the panel goes into `systemMessage` (rendered to the
+    // user inline) AND is prepended to `additionalContext` (so it survives in
+    // the transcript / Claude's view even if systemMessage is suppressed).
+    const additionalContext = ctx ? `${panelPlain}\n\n${ctx}` : `${panelPlain}\n`;
+    const out = {
+      systemMessage: panelColor,
+      hookSpecificOutput: {
+        hookEventName: 'UserPromptSubmit',
+        additionalContext,
+      },
+    };
+    process.stdout.write(JSON.stringify(out));
   } catch {
     /* hooks must never crash the prompt */
   }
@@ -317,6 +453,14 @@ export async function hookStop() {
       await store(root, lastUser, lastAsst);
       process.stderr.write('🧠 brain  cached\n');
     }
+
+    // Stop hooks cannot print to the user inline via stdout/stderr, but the
+    // `systemMessage` JSON field is rendered. Surface the session aggregate so
+    // the user sees Brain Engine metrics *after* each completed request.
+    const panel = sessionPanel(root);
+    const out = { suppressOutput: true };
+    if (panel) out.systemMessage = panel;
+    process.stdout.write(JSON.stringify(out));
   } catch {
     /* swallow */
   }

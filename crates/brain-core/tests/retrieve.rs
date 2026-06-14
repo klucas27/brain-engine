@@ -254,7 +254,8 @@ fn context_assembly_respects_budget() {
     assert_eq!(ctx.context_tokens, 500);
     assert_eq!(ctx.dropped_count, 1);
     assert_eq!(ctx.chunks.len(), 2);
-    assert!(ctx.tokens_saved > 0);
+    assert!(ctx.theoretical_saved > 0);
+    assert_eq!(ctx.real_cost(), 500);
 }
 
 #[test]

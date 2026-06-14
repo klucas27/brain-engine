@@ -228,7 +228,8 @@ pub fn run(
         session_id: session_id.clone(),
         response_time_ms: Some(total_ms),
         context_tokens_estimated: Some(ctx.context_tokens as i64),
-        tokens_saved_estimated: Some(ctx.tokens_saved as i64),
+        // Stored for reference only; never accumulated (see metrics.rs).
+        tokens_saved_estimated: Some(ctx.theoretical_saved as i64),
         chunks_used: Some(ctx.chunks.len() as i64),
         retrieval_time_ms: Some(retrieval_ms as u64),
         embedding_source: Some("local".into()),
@@ -277,16 +278,15 @@ fn print_human(query: &str, ctx: &Context, ms: u128, model: &str) {
     }
 
     println!("{RULE}");
-    println!("Token report  ({ms}ms)");
+    println!("[Brain Metrics]  ({ms}ms)");
+    println!();
+    println!("  Context injected:              {} tokens", ctx.context_tokens);
+    println!("  Estimated project size:        {} tokens", ctx.project_tokens);
+    println!("  Reduction (vs full project):   {:.1}%", ctx.reduction_pct());
+    println!("  Real cost (added to prompt):   +{} tokens", ctx.real_cost());
     println!(
-        "  context    {} / {} budget",
-        ctx.context_tokens, ctx.project_tokens
-    );
-    println!("  project    ~{} (estimated total)", ctx.project_tokens);
-    println!(
-        "  saved      ~{} ({:.1}%)",
-        ctx.tokens_saved,
-        ctx.savings_pct()
+        "  Efficiency ratio:              {:.1}%",
+        ctx.efficiency_ratio() * 100.0
     );
     if ctx.dropped_count > 0 {
         println!(
@@ -322,8 +322,10 @@ fn print_json(query: &str, ctx: &Context, ms: u128, model: &str) {
             "retrieval_ms": ms,
             "context_tokens": ctx.context_tokens,
             "project_tokens_estimated": ctx.project_tokens,
-            "tokens_saved_estimated": ctx.tokens_saved,
-            "savings_pct": ctx.savings_pct(),
+            "real_cost": ctx.real_cost(),
+            "theoretical_saved": ctx.theoretical_saved,
+            "reduction_pct": ctx.reduction_pct(),
+            "efficiency_ratio": ctx.efficiency_ratio(),
             "dropped_chunks": ctx.dropped_count,
         }
     });
