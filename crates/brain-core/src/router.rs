@@ -11,6 +11,9 @@
 //!    Useful for `--llm deepseek` / `--llm claude` CLI flags.
 //! 2. **High system load** — if CPU% or RAM is above threshold → `DeepSeek`
 //!    (lighter local footprint while the machine is stressed).
+//! 2.5. **Rate-limit block** — if `~/.brain/llm_state.json` records an active
+//!    block for Claude (set by `brain llm block claude` or auto-detected from
+//!    the Stop hook) → `DeepSeek` until the block expires.
 //! 3. **Default** — `Claude` (via Claude Code, zero additional API cost).
 //!
 //! # Separation of concerns
@@ -69,15 +72,17 @@ pub struct RouteDecision {
 /// Route a single LLM request given the system state.
 ///
 /// # Parameters
-/// * `cfg`      — decision thresholds from the global config.
-/// * `snapshot` — current CPU/RAM metrics (use [`SystemSnapshot::capture`] in
+/// * `cfg`               — decision thresholds from the global config.
+/// * `snapshot`          — current CPU/RAM metrics (use [`SystemSnapshot::capture`] in
 ///   production; inject a fixed value in tests).
-/// * `forced`   — if `Some`, skip all rules and return this route with an
-///   explanatory reason.
+/// * `forced`            — if `Some`, skip all rules and return this route.
+/// * `is_claude_blocked` — `true` when `~/.brain/llm_state.json` records an
+///   active rate-limit block for Claude (caller reads the file; keeps this fn pure).
 pub fn route(
     cfg: &DecisionConfig,
     snapshot: SystemSnapshot,
     forced: Option<LlmRoute>,
+    is_claude_blocked: bool,
 ) -> RouteDecision {
     // Rule 1 — forced override (e.g. --llm flag)
     if let Some(r) = forced {
@@ -108,6 +113,16 @@ pub fn route(
         };
     }
 
+    // Rule 2.5 — Claude rate-limited → DeepSeek until block expires
+    if is_claude_blocked {
+        return RouteDecision {
+            route: LlmRoute::DeepSeek,
+            reason: "rate_limit: Claude is blocked (token quota exhausted) — \
+                     using DeepSeek until the window resets"
+                .to_string(),
+        };
+    }
+
     // Rule 3 — default → Claude (via Claude Code, free and private)
     RouteDecision {
         route: LlmRoute::Claude,
@@ -118,9 +133,14 @@ pub fn route(
 /// Sample live system metrics and route an LLM request.
 ///
 /// Prefer [`route`] in tests; use this in production code paths.
-pub fn route_live(cfg: &DecisionConfig, forced: Option<LlmRoute>) -> RouteDecision {
+/// Read [`crate::llm_state`] before calling this and pass `is_claude_blocked`.
+pub fn route_live(
+    cfg: &DecisionConfig,
+    forced: Option<LlmRoute>,
+    is_claude_blocked: bool,
+) -> RouteDecision {
     let snapshot = SystemSnapshot::capture();
-    route(cfg, snapshot, forced)
+    route(cfg, snapshot, forced, is_claude_blocked)
 }
 
 // ---------------------------------------------------------------------------
@@ -134,18 +154,11 @@ mod tests {
     use crate::decision::SystemSnapshot;
 
     fn cfg() -> DecisionConfig {
-        DecisionConfig {
-            cpu_high_threshold: 80,
-            memory_high_threshold_mb: 2048,
-            large_batch_threshold: 64,
-        }
+        DecisionConfig::default()
     }
 
     fn snap(cpu_pct: u8, ram_used_mb: u64) -> SystemSnapshot {
-        SystemSnapshot {
-            cpu_pct,
-            ram_used_mb,
-        }
+        SystemSnapshot { cpu_pct, ram_used_mb }
     }
 
     // ------------------------------------------------------------------
@@ -154,27 +167,33 @@ mod tests {
 
     #[test]
     fn forced_claude_ignores_load() {
-        // Even under heavy load, the forced route wins.
-        let d = route(&cfg(), snap(95, 4000), Some(LlmRoute::Claude));
+        let d = route(&cfg(), snap(95, 4000), Some(LlmRoute::Claude), false);
         assert_eq!(d.route, LlmRoute::Claude);
         assert!(d.reason.contains("forced"), "reason: {}", d.reason);
     }
 
     #[test]
     fn forced_deepseek_ignores_load() {
-        // Even under no load, the forced route wins.
-        let d = route(&cfg(), snap(5, 128), Some(LlmRoute::DeepSeek));
+        let d = route(&cfg(), snap(5, 128), Some(LlmRoute::DeepSeek), false);
         assert_eq!(d.route, LlmRoute::DeepSeek);
         assert!(d.reason.contains("forced"), "reason: {}", d.reason);
     }
 
+    #[test]
+    fn forced_claude_wins_even_when_blocked() {
+        // A forced CLI flag overrides even a rate-limit block.
+        let d = route(&cfg(), snap(10, 512), Some(LlmRoute::Claude), true);
+        assert_eq!(d.route, LlmRoute::Claude);
+        assert!(d.reason.contains("forced"), "reason: {}", d.reason);
+    }
+
     // ------------------------------------------------------------------
-    // Rule 2 — high CPU → DeepSeek
+    // Rule 2 — high CPU / RAM → DeepSeek
     // ------------------------------------------------------------------
 
     #[test]
     fn high_cpu_routes_to_deepseek() {
-        let d = route(&cfg(), snap(90, 512), None);
+        let d = route(&cfg(), snap(90, 512), None, false);
         assert_eq!(d.route, LlmRoute::DeepSeek);
         assert!(d.reason.contains("load_high"), "reason: {}", d.reason);
         assert!(d.reason.contains("cpu"), "reason: {}", d.reason);
@@ -182,37 +201,62 @@ mod tests {
 
     #[test]
     fn cpu_at_exact_threshold_routes_to_deepseek() {
-        let d = route(&cfg(), snap(80, 512), None);
+        let d = route(&cfg(), snap(80, 512), None, false);
         assert_eq!(d.route, LlmRoute::DeepSeek);
         assert!(d.reason.contains("cpu"), "reason: {}", d.reason);
     }
 
     #[test]
-    fn cpu_one_below_threshold_does_not_route_to_deepseek_for_cpu() {
-        let d = route(&cfg(), snap(79, 512), None);
-        assert!(
-            !d.reason.contains("cpu"),
-            "should not mention cpu, reason: {}",
-            d.reason
-        );
+    fn cpu_one_below_threshold_does_not_route_for_cpu() {
+        let d = route(&cfg(), snap(79, 512), None, false);
+        assert!(!d.reason.contains("cpu"), "reason: {}", d.reason);
     }
-
-    // ------------------------------------------------------------------
-    // Rule 2 — high RAM → DeepSeek
-    // ------------------------------------------------------------------
 
     #[test]
     fn high_ram_routes_to_deepseek() {
-        let d = route(&cfg(), snap(10, 3000), None);
+        let d = route(&cfg(), snap(10, 3000), None, false);
         assert_eq!(d.route, LlmRoute::DeepSeek);
         assert!(d.reason.contains("ram"), "reason: {}", d.reason);
     }
 
     #[test]
     fn ram_at_exact_threshold_routes_to_deepseek() {
-        let d = route(&cfg(), snap(10, 2048), None);
+        let d = route(&cfg(), snap(10, 2048), None, false);
         assert_eq!(d.route, LlmRoute::DeepSeek);
         assert!(d.reason.contains("ram"), "reason: {}", d.reason);
+    }
+
+    #[test]
+    fn cpu_rule_fires_before_ram_rule() {
+        let d = route(&cfg(), snap(90, 3000), None, false);
+        assert_eq!(d.route, LlmRoute::DeepSeek);
+        assert!(d.reason.contains("cpu"), "reason: {}", d.reason);
+    }
+
+    // ------------------------------------------------------------------
+    // Rule 2.5 — rate-limit block
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn rate_limit_block_switches_to_deepseek() {
+        let d = route(&cfg(), snap(10, 512), None, true);
+        assert_eq!(d.route, LlmRoute::DeepSeek);
+        assert!(d.reason.contains("rate_limit"), "reason: {}", d.reason);
+    }
+
+    #[test]
+    fn no_block_uses_claude() {
+        let d = route(&cfg(), snap(10, 512), None, false);
+        assert_eq!(d.route, LlmRoute::Claude);
+    }
+
+    #[test]
+    fn cpu_high_fires_before_rate_limit_block() {
+        // Rule 2 (CPU) has higher priority than Rule 2.5 (block).
+        // Both route to DeepSeek, but the reason should mention cpu.
+        let d = route(&cfg(), snap(90, 512), None, true);
+        assert_eq!(d.route, LlmRoute::DeepSeek);
+        assert!(d.reason.contains("cpu"), "reason: {}", d.reason);
     }
 
     // ------------------------------------------------------------------
@@ -221,40 +265,29 @@ mod tests {
 
     #[test]
     fn default_routes_to_claude() {
-        let d = route(&cfg(), snap(10, 512), None);
+        let d = route(&cfg(), snap(10, 512), None, false);
         assert_eq!(d.route, LlmRoute::Claude);
         assert!(d.reason.contains("default"), "reason: {}", d.reason);
     }
 
     // ------------------------------------------------------------------
-    // Priority: CPU rule fires before RAM rule
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn cpu_rule_fires_before_ram_rule() {
-        let d = route(&cfg(), snap(90, 3000), None);
-        assert_eq!(d.route, LlmRoute::DeepSeek);
-        // Reason should mention cpu, not ram, because CPU check comes first.
-        assert!(d.reason.contains("cpu"), "reason: {}", d.reason);
-    }
-
-    // ------------------------------------------------------------------
-    // Decision fields are always populated
+    // Reason is always non-empty
     // ------------------------------------------------------------------
 
     #[test]
     fn route_decision_reason_never_empty() {
-        for (cpu, ram, forced) in [
-            (90u8, 512u64, None),
-            (10, 3000, None),
-            (10, 512, None),
-            (10, 512, Some(LlmRoute::Claude)),
-            (10, 512, Some(LlmRoute::DeepSeek)),
+        for (cpu, ram, forced, blocked) in [
+            (90u8, 512u64, None, false),
+            (10, 3000, None, false),
+            (10, 512, None, false),
+            (10, 512, None, true),
+            (10, 512, Some(LlmRoute::Claude), false),
+            (10, 512, Some(LlmRoute::DeepSeek), false),
         ] {
-            let d = route(&cfg(), snap(cpu, ram), forced);
+            let d = route(&cfg(), snap(cpu, ram), forced, blocked);
             assert!(
                 !d.reason.is_empty(),
-                "empty reason for cpu={cpu} ram={ram} forced={forced:?}"
+                "empty reason for cpu={cpu} ram={ram} forced={forced:?} blocked={blocked}"
             );
         }
     }
@@ -275,3 +308,4 @@ mod tests {
         assert_eq!(format!("{}", LlmRoute::DeepSeek), "deepseek");
     }
 }
+

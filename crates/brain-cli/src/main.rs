@@ -18,6 +18,7 @@ use clap::{Parser, Subcommand};
 
 use commands::cache::CacheAction;
 use commands::daemon::DaemonAction;
+use commands::llm::LlmAction;
 use commands::stats::StatsAction;
 
 /// Top-level CLI definition.
@@ -85,6 +86,11 @@ enum Command {
     Status,
     /// Generate Claude Code hooks for transparent context injection and response caching.
     InstallHooks,
+    /// Inspect and manage LLM provider availability (rate-limit blocks).
+    Llm {
+        #[command(subcommand)]
+        action: LlmAction,
+    },
     /// Show per-request metrics (latency, tokens saved, cache hit rate, embedding source).
     Stats {
         #[command(subcommand)]
@@ -118,6 +124,7 @@ fn main() -> ExitCode {
         Command::Daemon { action } => commands::daemon::run(&root, cli.json, action),
         Command::Status => commands::status::run(&root, cli.json),
         Command::InstallHooks => commands::install_hooks::run(&root, cli.json),
+        Command::Llm { action } => commands::llm::run(&root, cli.json, action),
         Command::Stats { action } => {
             let action = action.unwrap_or(StatsAction::Show);
             commands::stats::run(&root, cli.json, action)

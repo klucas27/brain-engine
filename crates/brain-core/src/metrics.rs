@@ -273,6 +273,7 @@ pub fn aggregate_stats(conn: &Connection) -> Result<StatsReport> {
     })
 }
 
+
 /// Delete all rows in `requests` and `sessions`.  Used by `brain stats --reset`.
 pub fn reset(conn: &Connection) -> Result<(i64, i64)> {
     let req: i64 = conn.query_row("SELECT COUNT(*) FROM requests", [], |r| r.get(0))?;

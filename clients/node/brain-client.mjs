@@ -190,6 +190,33 @@ function extractText(content) {
   return '';
 }
 
+/**
+ * Detect whether a Claude API error indicates the token quota is exhausted.
+ * Checks both structured error types and plain-text error messages.
+ * @param {object} evt   - The Stop hook event JSON.
+ * @param {string} lastAsst - Last assistant message text from the transcript.
+ * @returns {boolean}
+ */
+function isRateLimitError(evt, lastAsst) {
+  // 1. The Stop event may carry a stop_reason of 'error' with an error_type.
+  const errorType = evt.error_type || evt.error?.type || '';
+  const rateLimitTypes = ['rate_limit_error', 'overloaded_error', 'usage_limit_exceeded'];
+  if (rateLimitTypes.includes(errorType)) return true;
+
+  // 2. Scan the last assistant message for known error strings.
+  const patterns = [
+    /rate.?limit/i,
+    /usage.?limit/i,
+    /token.?quota/i,
+    /too many requests/i,
+    /overloaded/i,
+    /claude.*unavailable/i,
+    /\b529\b/,            // HTTP 529 (Anthropic overload)
+    /\b429\b/,            // HTTP 429 (rate limit)
+  ];
+  return patterns.some(re => re.test(lastAsst));
+}
+
 /** Format daemon query result into additive context text (or '' if nothing useful). */
 function formatContext(result) {
   if (!result) return '';
@@ -244,6 +271,8 @@ export async function hookPrompt() {
  * Stop hook entry.
  * Reads the event JSON from stdin, extracts the last user prompt + last
  * assistant message from the JSONL transcript, and stores the pair in cache.
+ * Also detects Claude rate-limit errors and calls `brain llm block claude`
+ * so future requests are automatically routed to DeepSeek.
  */
 export async function hookStop() {
   try {
@@ -267,6 +296,23 @@ export async function hookStop() {
       if (role === 'user')      lastUser = text;
       else if (role === 'assistant') lastAsst = text;
     }
+
+    // Detect Claude rate-limit / quota-exhausted errors and block Claude
+    // automatically so the router switches to DeepSeek on the next request.
+    if (isRateLimitError(evt, lastAsst)) {
+      try {
+        const { execFileSync } = await import('child_process');
+        execFileSync('brain', ['--path', root, 'llm', 'block', 'claude'], {
+          timeout: 5_000,
+          stdio:   'pipe',
+        });
+        process.stderr.write('🧠 brain  Claude rate-limited → switching to DeepSeek\n');
+      } catch {
+        // If `brain` is not in PATH, fall back to a no-op — the user will see
+        // DeepSeek routing once they manually run `brain llm block claude`.
+      }
+    }
+
     if (lastUser && lastAsst) {
       await store(root, lastUser, lastAsst);
       process.stderr.write('🧠 brain  cached\n');

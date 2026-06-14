@@ -66,6 +66,11 @@ impl GlobalPaths {
         self.root.join("models")
     }
 
+    /// `~/.brain/llm_state.json` — persisted LLM availability state (rate-limit blocks).
+    pub fn llm_state_file(&self) -> PathBuf {
+        self.root.join("llm_state.json")
+    }
+
     /// All directories that must exist for a healthy global brain.
     pub fn directories(&self) -> Vec<PathBuf> {
         vec![

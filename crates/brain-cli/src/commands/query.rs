@@ -13,9 +13,11 @@ use brain_core::cache::{self, CacheLookup};
 use brain_core::config::{self, GlobalConfig, ProjectConfig, Providers};
 use brain_core::context::{self, Context};
 use brain_core::db;
+use brain_core::llm_state;
 use brain_core::metrics::{self, RequestMetric};
 use brain_core::paths::{GlobalPaths, ProjectPaths};
 use brain_core::retrieve;
+use brain_core::router;
 use brain_core::tokens;
 use brain_core::vectors::VectorStore;
 use brain_core::{BrainError, Result};
@@ -95,6 +97,14 @@ pub fn run(
 
     // Track total wall time from this point.
     let wall_start = std::time::Instant::now();
+
+    // ── LLM routing ──────────────────────────────────────────────────
+    // Check ~/.brain/llm_state.json for an active rate-limit block, then let
+    // the router decide Claude vs DeepSeek. Non-fatal if the file is unreadable.
+    let llm_state = llm_state::read(&global.llm_state_file()).unwrap_or_default();
+    let is_claude_blocked = llm_state::is_blocked(&llm_state, "claude");
+    let route_decision = router::route_live(&global_cfg.decision, None, is_claude_blocked);
+    let llm_used = route_decision.route.as_str().to_string();
 
     // ── Cache lookup (before retrieval) ─────────────────────────────
     if !no_cache {
@@ -222,6 +232,8 @@ pub fn run(
         chunks_used: Some(ctx.chunks.len() as i64),
         retrieval_time_ms: Some(retrieval_ms as u64),
         embedding_source: Some("local".into()),
+        llm_used: Some(llm_used),
+        decision_reason: Some(route_decision.reason.clone()),
         cache_hit: false,
         ..Default::default()
     };

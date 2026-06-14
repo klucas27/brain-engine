@@ -69,6 +69,10 @@ pub struct DecisionConfig {
     pub memory_high_threshold_mb: u64,
     /// Batch size at or above which local processing is preferred (throughput).
     pub large_batch_threshold: usize,
+    /// How long (in hours) to block Claude after a detected rate-limit error.
+    /// Matches Claude's approximate token-quota reset cycle (~5 h).
+    /// The block is stored in `~/.brain/llm_state.json` and expires automatically.
+    pub claude_window_hours: u64,
 }
 
 impl Default for DecisionConfig {
@@ -77,6 +81,7 @@ impl Default for DecisionConfig {
             cpu_high_threshold: 80,
             memory_high_threshold_mb: 2048,
             large_batch_threshold: 64,
+            claude_window_hours: 5,  // matches Claude's ~5 h rate-limit reset cycle
         }
     }
 }

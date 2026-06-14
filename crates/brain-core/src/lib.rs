@@ -26,7 +26,9 @@
 //!
 //! Phase 5 (decision engine & AI router):
 //! * [`decision`] — sample CPU/RAM, apply thresholds, choose local vs API embeddings
-//! * [`router`]   — route LLM requests (DeepSeek vs Claude) based on system load
+//! * [`decision`]   — sample CPU/RAM, apply thresholds, choose local vs API embeddings
+//! * [`router`]     — route LLM requests (DeepSeek vs Claude) based on system load
+//! * [`llm_state`]  — persist rate-limit blocks in `~/.brain/llm_state.json`
 //!
 //! Phase 6 (cache layer):
 //! * [`cache`] — exact SHA-256 response cache with TTL; optional semantic cache
@@ -45,6 +47,7 @@ pub mod decision;
 pub mod error;
 pub mod hash;
 pub mod index;
+pub mod llm_state;
 pub mod metrics;
 pub mod paths;
 pub mod retrieve;
