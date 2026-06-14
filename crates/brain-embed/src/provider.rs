@@ -8,6 +8,7 @@ use std::path::Path;
 
 use brain_core::config::Providers;
 
+use crate::api::ApiEmbedder;
 use crate::embedder::Embedder;
 use crate::error::{EmbedError, EmbedResult};
 use crate::local::LocalEmbedder;
@@ -17,6 +18,24 @@ use crate::local::LocalEmbedder;
 /// `provider_name` must exist as a key under `providers.embedding`.
 /// `model_cache_dir` is forwarded to the local backend for model storage;
 /// pass `None` to use the default cache location.
+///
+/// ## Provider config fields
+///
+/// **Local** (runtime = "cpu" | "local"):
+/// ```json
+/// { "runtime": "cpu", "model": "bge-small-en-v1.5", "dim": 384 }
+/// ```
+///
+/// **Remote / OpenAI-compatible** (runtime = "api" or omitted):
+/// ```json
+/// { "api_base": "https://api.deepseek.com", "model": "deepseek-embedding",
+///   "api_key_env": "DEEPSEEK_API_KEY", "dim": 1024 }
+/// ```
+///
+/// **Auto-fallback** (runtime = "auto"): tries `primary`, falls back to `fallback`.
+/// ```json
+/// { "runtime": "auto", "primary": "deepseek", "fallback": "local" }
+/// ```
 pub fn from_provider(
     provider_name: &str,
     providers: &Providers,
@@ -27,11 +46,43 @@ pub fn from_provider(
         .get(provider_name)
         .ok_or_else(|| EmbedError::UnknownProvider(provider_name.to_string()))?;
 
-    // The `runtime` field distinguishes local ONNX from remote API calls.
-    let runtime = cfg.get("runtime").and_then(|v| v.as_str()).unwrap_or("cpu");
+    let runtime = cfg.get("runtime").and_then(|v| v.as_str()).unwrap_or("api");
 
     match runtime {
         "cpu" | "local" => Ok(Box::new(LocalEmbedder::new(model_cache_dir)?)),
+        "api" => {
+            let api_base = cfg
+                .get("api_base")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| EmbedError::Api(format!("provider '{provider_name}' missing 'api_base'")))?;
+            let model = cfg
+                .get("model")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| EmbedError::Api(format!("provider '{provider_name}' missing 'model'")))?;
+            let api_key_env = cfg
+                .get("api_key_env")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| EmbedError::Api(format!("provider '{provider_name}' missing 'api_key_env'")))?;
+            let dim = cfg
+                .get("dim")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1024) as usize;
+            Ok(Box::new(ApiEmbedder::new(api_base, model, api_key_env, dim)?))
+        }
+        "auto" => {
+            let primary  = cfg.get("primary").and_then(|v| v.as_str()).unwrap_or("deepseek");
+            let fallback = cfg.get("fallback").and_then(|v| v.as_str()).unwrap_or("local");
+            match from_provider(primary, providers, model_cache_dir) {
+                Ok(emb) => {
+                    eprintln!("[brain] embedder: {primary}");
+                    Ok(emb)
+                }
+                Err(e) => {
+                    eprintln!("[brain] {primary} unavailable ({e}), falling back to {fallback}");
+                    from_provider(fallback, providers, model_cache_dir)
+                }
+            }
+        }
         other => Err(EmbedError::UnsupportedRuntime(other.to_string())),
     }
 }

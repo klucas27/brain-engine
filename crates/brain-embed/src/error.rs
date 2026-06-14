@@ -11,8 +11,14 @@ pub enum EmbedError {
     #[error("unknown embedding provider '{0}'; check ~/.brain/providers.json")]
     UnknownProvider(String),
 
-    #[error("unsupported embedding runtime '{0}'; only 'local'/'cpu' is implemented in Phase 3")]
+    #[error("unsupported embedding runtime '{0}'")]
     UnsupportedRuntime(String),
+
+    #[error("missing API key: environment variable '{0}' is not set")]
+    MissingApiKey(String),
+
+    #[error("API request failed: {0}")]
+    Api(String),
 
     /// Raised when the model pinned in the SQLite `meta` table differs from
     /// the one specified in the current provider config.  The caller decides

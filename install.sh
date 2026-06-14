@@ -38,6 +38,11 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     else
         warn "brain not found at $BINARY — nothing to do."
     fi
+    DAEMON_BIN="$BIN_DIR/brain-daemon"
+    if [[ -f "$DAEMON_BIN" ]]; then
+        rm -f "$DAEMON_BIN"
+        ok "Removed $DAEMON_BIN"
+    fi
     exit 0
 fi
 
@@ -60,17 +65,21 @@ ok "cargo $CARGO_VERSION found."
 # ── Build ─────────────────────────────────────────────────────────────────────
 info "Building brain (release)…"
 cd "$SCRIPT_DIR"
-cargo build --release --bin brain 2>&1
+cargo build --release --bin brain --bin brain-daemon 2>&1
 
 BUILT="$SCRIPT_DIR/target/release/brain"
+BUILT_DAEMON="$SCRIPT_DIR/target/release/brain-daemon"
 [[ -f "$BUILT" ]] || die "Build succeeded but binary not found at $BUILT"
-ok "Build complete: $BUILT"
+[[ -f "$BUILT_DAEMON" ]] || die "Build succeeded but brain-daemon not found at $BUILT_DAEMON"
+ok "Build complete: $BUILT, $BUILT_DAEMON"
 
 # ── Install ───────────────────────────────────────────────────────────────────
 info "Installing to $BIN_DIR…"
 mkdir -p "$BIN_DIR"
 install -m 0755 "$BUILT" "$BINARY"
+install -m 0755 "$BUILT_DAEMON" "$BIN_DIR/brain-daemon"
 ok "Installed: $BINARY"
+ok "Installed: $BIN_DIR/brain-daemon"
 
 # ── PATH check ────────────────────────────────────────────────────────────────
 if ! echo ":$PATH:" | grep -q ":$BIN_DIR:"; then

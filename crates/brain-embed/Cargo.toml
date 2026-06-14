@@ -10,4 +10,6 @@ description = "Embedding backends for Brain Engine: trait definition, local ONNX
 brain-core = { path = "../brain-core" }
 fastembed.workspace = true
 thiserror.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true

@@ -3,3 +3,4 @@
 *.brain.pid
 *.brain.sock
 .claude
+brain.config.json

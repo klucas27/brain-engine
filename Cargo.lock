@@ -1192,6 +1192,8 @@ version = "0.10.0"
 dependencies = [
  "brain-core",
  "fastembed",
+ "reqwest",
+ "serde",
  "serde_json",
  "thiserror",
 ]
@@ -5728,6 +5730,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2 0.4.14",

@@ -40,6 +40,8 @@ notify = "6"
 futures = "0.3"
 # Phase 5 — decision engine & AI router
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+# Remote embedding / LLM API clients
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [profile.release]
 opt-level = 3

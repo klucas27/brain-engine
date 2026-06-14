@@ -204,6 +204,15 @@ function formatContext(result) {
   return `## Brain Engine — retrieved context (additive)\n\n${body}\n`;
 }
 
+/** Status line written to stderr so the user can see Brain Engine is active. */
+function statusLine(result) {
+  if (!result) return null;
+  if (result.cache_hit && result.response) return '🧠 brain  cache hit';
+  const n = Array.isArray(result.chunks) ? result.chunks.length : 0;
+  if (n === 0) return null;
+  return `🧠 brain  ${n} chunk${n > 1 ? 's' : ''} injected`;
+}
+
 /**
  * UserPromptSubmit hook entry.
  * Reads the event JSON from stdin, queries the daemon and writes additive
@@ -218,7 +227,14 @@ export async function hookPrompt() {
     if (!prompt.trim()) return;
     if (!(await ping(root))) return;           // daemon down → silent no-op
     const res = await query(root, prompt);
-    if (res && res.ok) process.stdout.write(formatContext(res.result));
+    if (res && res.ok) {
+      const ctx = formatContext(res.result);
+      if (ctx) {
+        process.stdout.write(ctx);
+        const line = statusLine(res.result);
+        if (line) process.stderr.write(line + '\n');
+      }
+    }
   } catch {
     /* hooks must never crash the prompt */
   }
@@ -251,7 +267,10 @@ export async function hookStop() {
       if (role === 'user')      lastUser = text;
       else if (role === 'assistant') lastAsst = text;
     }
-    if (lastUser && lastAsst) await store(root, lastUser, lastAsst);
+    if (lastUser && lastAsst) {
+      await store(root, lastUser, lastAsst);
+      process.stderr.write('🧠 brain  cached\n');
+    }
   } catch {
     /* swallow */
   }
