@@ -84,7 +84,7 @@ impl Default for DecisionConfig {
             cpu_high_threshold: 80,
             memory_high_threshold_mb: 2048,
             large_batch_threshold: 64,
-            claude_window_hours: 5,  // matches Claude's ~5 h rate-limit reset cycle
+            claude_window_hours: 5, // matches Claude's ~5 h rate-limit reset cycle
         }
     }
 }
@@ -208,6 +208,10 @@ pub struct ProjectConfig {
     /// `"rich"` (default) or `"eco"` (compact, token-saving).
     /// Set to `"eco"` in brain.config.json to reduce tokens injected per request.
     pub output_style: OutputStyle,
+    /// Intent-aware locator for action prompts.
+    pub locator: LocatorConfig,
+    /// Knowledge Digest summaries generated after indexing.
+    pub summaries: SummariesConfig,
 }
 
 impl ProjectConfig {
@@ -232,6 +236,8 @@ impl Default for ProjectConfig {
             project_name: "project".to_string(),
             embedding_provider: "local".to_string(),
             output_style: "rich".to_string(),
+            locator: LocatorConfig::default(),
+            summaries: SummariesConfig::default(),
             include_globs: vec!["**/*".to_string()],
             exclude_globs: vec![
                 "**/.git/**".to_string(),
@@ -254,6 +260,50 @@ impl Default for ProjectConfig {
             ],
             max_file_size_bytes: 1024 * 1024,
             chunk: ChunkConfig::default(),
+        }
+    }
+}
+
+/// Knowledge Digest summary generation config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SummariesConfig {
+    /// Generate and persist summaries after indexing.
+    pub enabled: bool,
+    /// Reserved for an opt-in LLM summarizer; default stays deterministic and local.
+    pub use_llm: bool,
+    /// Approximate maximum size for each file summary.
+    pub max_summary_tokens: usize,
+}
+
+impl Default for SummariesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            use_llm: false,
+            max_summary_tokens: 120,
+        }
+    }
+}
+
+/// Locator config for action prompts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LocatorConfig {
+    /// Enable deterministic action intent detection and file target injection.
+    pub enabled: bool,
+    /// Maximum file targets returned for an action prompt.
+    pub max_targets: usize,
+    /// Whether clients should render the explicit behavioral directive.
+    pub inject_directive: bool,
+}
+
+impl Default for LocatorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_targets: 5,
+            inject_directive: true,
         }
     }
 }

@@ -13,6 +13,7 @@ use brain_core::config::{self, ProjectConfig, Providers};
 use brain_core::db;
 use brain_core::index::{self, IndexStats};
 use brain_core::paths::{GlobalPaths, ProjectPaths};
+use brain_core::summarize::{self, SummaryStats};
 use brain_core::vectors::{ChunkVector, VectorStore};
 use brain_core::{BrainError, Result};
 use brain_embed::Embedder;
@@ -43,14 +44,16 @@ pub fn run(root: &Path, json: bool, reindex: bool, no_embed: bool) -> Result<()>
     // ── Step 1: incremental chunk indexing ──────────────────────────────────
     let index_start = std::time::Instant::now();
     let index_stats = index::index_project(root, &cfg, &mut conn)?;
+    let summary_stats =
+        summarize::sync_project_summaries(root, &project.summaries_dir(), &cfg, &conn)?;
     let index_ms = index_start.elapsed().as_millis();
 
     if no_embed {
         // Fast path: skip all embedding work; output flat JSON for CLI compat.
         if json {
-            print_json_index_only(&index_stats, index_ms);
+            print_json_index_only(&index_stats, &summary_stats, index_ms);
         } else {
-            print_human_index_only(&index_stats, index_ms);
+            print_human_index_only(&index_stats, &summary_stats, index_ms);
         }
         return Ok(());
     }
@@ -109,6 +112,7 @@ pub fn run(root: &Path, json: bool, reindex: bool, no_embed: bool) -> Result<()>
     if json {
         print_json(
             &index_stats,
+            &summary_stats,
             index_ms,
             &embed_stats,
             embed_ms,
@@ -117,6 +121,7 @@ pub fn run(root: &Path, json: bool, reindex: bool, no_embed: bool) -> Result<()>
     } else {
         print_human(
             &index_stats,
+            &summary_stats,
             index_ms,
             &embed_stats,
             embed_ms,
@@ -297,13 +302,15 @@ fn embed_pending_chunks(
 // Human-readable output
 // ---------------------------------------------------------------------------
 
-fn print_human_index_only(s: &IndexStats, index_ms: u128) {
+fn print_human_index_only(s: &IndexStats, summaries: &SummaryStats, index_ms: u128) {
     println!("✓ Indexed in {index_ms}ms");
     print_index_fields(s);
+    print_summary_fields(summaries);
 }
 
 fn print_human(
     s: &IndexStats,
+    summaries: &SummaryStats,
     index_ms: u128,
     e: &EmbedStats,
     embed_ms: u128,
@@ -311,11 +318,21 @@ fn print_human(
 ) {
     println!("✓ Indexed in {index_ms}ms");
     print_index_fields(s);
+    print_summary_fields(summaries);
     println!();
     println!("✓ Embedded in {embed_ms}ms");
     println!("  embedded   {}", e.embedded);
     println!("  cached     {}", e.already_embedded);
     println!("  vectors    {total_vectors}  (total in store)");
+}
+
+fn print_summary_fields(s: &SummaryStats) {
+    println!(
+        "  summaries  {} files, {} modules, project {}",
+        s.file_summaries_written,
+        s.module_summaries_written,
+        if s.project_summary_written { "updated" } else { "unchanged" }
+    );
 }
 
 fn print_index_fields(s: &IndexStats) {
@@ -337,7 +354,7 @@ fn print_index_fields(s: &IndexStats) {
 // ---------------------------------------------------------------------------
 
 /// Flat JSON output (Phase 2 compat), used when `--no-embed` is passed.
-fn print_json_index_only(s: &IndexStats, index_ms: u128) {
+fn print_json_index_only(s: &IndexStats, summaries: &SummaryStats, index_ms: u128) {
     let value = serde_json::json!({
         "elapsed_ms": index_ms,
         "scanned": s.scanned,
@@ -348,6 +365,7 @@ fn print_json_index_only(s: &IndexStats, index_ms: u128) {
         "skipped_binary": s.skipped_binary,
         "skipped_large": s.skipped_large,
         "skipped_excluded": s.skipped_excluded,
+        "summaries": summary_json(summaries),
     });
     println!("{}", serde_json::to_string_pretty(&value).unwrap());
 }
@@ -355,6 +373,7 @@ fn print_json_index_only(s: &IndexStats, index_ms: u128) {
 /// Nested JSON output including embed stats.
 fn print_json(
     s: &IndexStats,
+    summaries: &SummaryStats,
     index_ms: u128,
     e: &EmbedStats,
     embed_ms: u128,
@@ -371,6 +390,7 @@ fn print_json(
             "skipped_binary": s.skipped_binary,
             "skipped_large": s.skipped_large,
             "skipped_excluded": s.skipped_excluded,
+            "summaries": summary_json(summaries),
         },
         "embed": {
             "elapsed_ms": embed_ms,
@@ -380,4 +400,14 @@ fn print_json(
         }
     });
     println!("{}", serde_json::to_string_pretty(&value).unwrap());
+}
+
+fn summary_json(s: &SummaryStats) -> serde_json::Value {
+    serde_json::json!({
+        "files_seen": s.files_seen,
+        "files_written": s.file_summaries_written,
+        "modules_written": s.module_summaries_written,
+        "project_written": s.project_summary_written,
+        "removed": s.removed,
+    })
 }

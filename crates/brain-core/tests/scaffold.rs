@@ -38,6 +38,8 @@ fn init_project_creates_full_layout() {
     assert_table_exists(&conn, "files");
     assert_table_exists(&conn, "chunks");
     assert_table_exists(&conn, "cache");
+    assert_table_exists(&conn, "summaries");
+    assert_table_exists(&conn, "symbols");
     assert_table_exists(&conn, "requests");
 }
 

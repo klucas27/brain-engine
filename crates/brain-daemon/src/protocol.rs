@@ -13,7 +13,7 @@
 //! {"id":1,"ok":false,"error":"..."}
 //! ```
 //!
-//! Supported methods: `ping`, `status`, `query`, `index`, `store`.
+//! Supported methods: `ping`, `status`, `query`, `index`, `store`, `symbols`.
 
 use serde::{Deserialize, Serialize};
 
@@ -93,9 +93,24 @@ pub struct StoreParams {
     pub response: String,
 }
 
+/// Parsed parameters for `symbols`.
+#[derive(Debug, Deserialize, Default)]
+pub struct SymbolsParams {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default = "default_symbol_limit")]
+    pub limit: usize,
+}
+
 fn default_top_k() -> usize {
     5
 }
 fn default_tokens() -> usize {
     4000
+}
+
+fn default_symbol_limit() -> usize {
+    20
 }

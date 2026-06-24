@@ -31,7 +31,7 @@ fn init_then_status_reports_ready() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Project brain [ready]"))
-        .stdout(predicate::str::contains("schema      v2"));
+        .stdout(predicate::str::contains("schema      v4"));
 }
 
 #[test]
@@ -115,6 +115,34 @@ fn init_index_status_end_to_end() {
         .clone();
     let status: serde_json::Value = serde_json::from_slice(&out).unwrap();
     assert!(status["project"]["files_indexed"].as_u64().unwrap() >= 1);
+}
+
+#[test]
+fn symbols_command_finds_indexed_symbol() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = tempfile::tempdir().unwrap();
+    std::fs::write(
+        proj.path().join("worker.rs"),
+        "pub fn handle_query(input: &str) -> usize { input.len() }\n",
+    )
+    .unwrap();
+
+    brain(home.path(), proj.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    brain(home.path(), proj.path())
+        .args(["index", "--no-embed"])
+        .assert()
+        .success();
+
+    brain(home.path(), proj.path())
+        .args(["symbols", "handle_query"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("worker.rs:1"))
+        .stdout(predicate::str::contains("fn handle_query"));
 }
 
 #[test]

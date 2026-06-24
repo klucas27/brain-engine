@@ -10,3 +10,4 @@ pub mod query;
 pub mod route;
 pub mod stats;
 pub mod status;
+pub mod symbols;

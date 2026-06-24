@@ -93,7 +93,7 @@ fn start(paths: &ProjectPaths, json: bool) -> Result<()> {
         // Detach stdio so the daemon runs silently in the background.
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| BrainError::Walk(format!("spawn brain-daemon: {e}")))?;
 

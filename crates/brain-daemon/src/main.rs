@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use std::sync::mpsc as std_mpsc;
 
 use brain_core::paths::ProjectPaths;
-use protocol::{IndexParams, QueryParams, RequestEnvelope, ResponseEnvelope, StoreParams};
+use protocol::{IndexParams, QueryParams, RequestEnvelope, ResponseEnvelope, StoreParams, SymbolsParams};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use worker::WorkerMsg;
@@ -264,6 +264,25 @@ async fn dispatch(line: &str, worker_tx: &std_mpsc::SyncSender<WorkerMsg>) -> Re
             let msg = WorkerMsg::Store {
                 query: params.query,
                 response: params.response,
+                reply: tx,
+            };
+            if worker_tx.send(msg).is_err() {
+                return ResponseEnvelope::err(id, "worker unavailable");
+            }
+            match rx.await {
+                Ok(Ok(v)) => ResponseEnvelope::ok(id, v),
+                Ok(Err(e)) => ResponseEnvelope::err(id, e),
+                Err(_) => ResponseEnvelope::err(id, "worker dropped reply"),
+            }
+        }
+
+        "symbols" => {
+            let params: SymbolsParams = serde_json::from_value(env.params).unwrap_or_default();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let msg = WorkerMsg::Symbols {
+                name: params.name,
+                kind: params.kind,
+                limit: params.limit,
                 reply: tx,
             };
             if worker_tx.send(msg).is_err() {

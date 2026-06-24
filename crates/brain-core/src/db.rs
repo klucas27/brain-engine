@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version. Each migration bumps `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Open (creating if needed) the metadata database at `path` and ensure the
 /// schema is migrated to [`SCHEMA_VERSION`].
@@ -61,6 +61,16 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V2)?;
         conn.pragma_update(None, "user_version", 2)?;
         version = 2;
+    }
+    if version < 3 {
+        conn.execute_batch(MIGRATION_V3)?;
+        conn.pragma_update(None, "user_version", 3)?;
+        version = 3;
+    }
+    if version < 4 {
+        conn.execute_batch(MIGRATION_V4)?;
+        conn.pragma_update(None, "user_version", 4)?;
+        version = 4;
     }
     debug_assert_eq!(version, SCHEMA_VERSION, "schema migrated to head");
     Ok(())
@@ -144,6 +154,39 @@ CREATE INDEX IF NOT EXISTS idx_requests_session ON requests(session_id);
 /// column is nullable by design (exact-cache entries have no stored vector).
 const MIGRATION_V2: &str = r#"
 ALTER TABLE cache ADD COLUMN query_vector TEXT;  -- JSON array of f32, nullable
+"#;
+
+/// Migration V3 — Knowledge Digest summaries.
+const MIGRATION_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS summaries (
+    id             INTEGER PRIMARY KEY,
+    scope          TEXT NOT NULL,        -- 'file' | 'module' | 'project'
+    target         TEXT NOT NULL,        -- file/dir path, or 'PROJECT'
+    summary        TEXT NOT NULL,
+    source_hash    TEXT NOT NULL,
+    token_estimate INTEGER NOT NULL DEFAULT 0,
+    model_used     TEXT,
+    created_at     INTEGER NOT NULL,
+    UNIQUE(scope, target)
+);
+CREATE INDEX IF NOT EXISTS idx_summaries_target ON summaries(target);
+"#;
+
+/// Migration V4 — Code Map symbols.
+const MIGRATION_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS symbols (
+    id          INTEGER PRIMARY KEY,
+    file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    signature   TEXT,
+    start_line  INTEGER NOT NULL,
+    end_line    INTEGER NOT NULL,
+    visibility  TEXT,
+    doc         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
 "#;
 
 /// Convenience: count rows in `files` and `chunks` for `brain status`.

@@ -22,6 +22,7 @@ use crate::chunk::{chunk_text, Chunk};
 use crate::config::ProjectConfig;
 use crate::error::{BrainError, Result};
 use crate::hash::sha256_hex;
+use crate::symbols;
 use crate::walk::{self, WalkEntry};
 
 /// Summary of an indexing run, suitable for CLI display and metrics.
@@ -52,6 +53,7 @@ struct ChangedFile {
     mtime: i64,
     lang: Option<String>,
     chunks: Vec<Chunk>,
+    symbols: Vec<symbols::ExtractedSymbol>,
 }
 
 /// Per-file outcome computed in parallel before the serial write phase.
@@ -175,13 +177,16 @@ fn classify(
         }
     }
 
+    let lang = detect_language(&entry.rel_path);
     let chunks = chunk_text(&text, &cfg.chunk);
+    let symbols = symbols::extract(&text, lang.as_deref());
     Ok(FileWork::Changed(ChangedFile {
         hash,
         size: entry.size,
         mtime: entry.mtime,
-        lang: detect_language(&entry.rel_path),
+        lang,
         chunks,
+        symbols,
     }))
 }
 
@@ -216,6 +221,8 @@ fn write_changed(
     let file_id: i64 = tx.query_row("SELECT id FROM files WHERE path = ?1", [rel_path], |r| {
         r.get(0)
     })?;
+
+    symbols::replace_for_file(tx, file_id, &changed.symbols)?;
 
     // Replace chunks wholesale: simplest correct strategy for a changed file.
     tx.execute("DELETE FROM chunks WHERE file_id = ?1", [file_id])?;

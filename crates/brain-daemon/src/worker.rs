@@ -18,10 +18,13 @@ use brain_core::config::{self, GlobalConfig, ProjectConfig, Providers};
 use brain_core::context;
 use brain_core::db;
 use brain_core::index;
+use brain_core::locator;
 use brain_core::metrics::{self, RequestMetric};
 use brain_core::model_router;
 use brain_core::paths::{GlobalPaths, ProjectPaths};
 use brain_core::retrieve;
+use brain_core::summarize;
+use brain_core::symbols;
 use brain_core::tokens;
 use brain_core::vectors::{ChunkVector, VectorStore};
 use brain_embed::Embedder;
@@ -56,6 +59,12 @@ pub enum WorkerMsg {
     Store {
         query: String,
         response: String,
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
+    Symbols {
+        name: Option<String>,
+        kind: Option<String>,
+        limit: usize,
         reply: oneshot::Sender<Result<Value, String>>,
     },
     Shutdown,
@@ -192,6 +201,14 @@ fn run_loop(mut state: WorkerState, rx: mpsc::Receiver<WorkerMsg>) {
             } => {
                 let _ = reply.send(handle_store(&state, &query, &response));
             }
+            WorkerMsg::Symbols {
+                name,
+                kind,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(handle_symbols(&state, name.as_deref(), kind.as_deref(), limit));
+            }
         }
     }
 }
@@ -301,6 +318,11 @@ fn handle_query(
     let retrieval_ms = retrieval_start.elapsed().as_millis() as u64;
     let project_tokens = tokens::project_total(&s.conn).map_err(|e| e.to_string())?;
     let ctx = context::assemble(retrieved, tokens, project_tokens);
+    let locator_json = locator::locate(query_text, &ctx.chunks, &s.cfg.locator)
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(Value::Null);
 
     // Store result in cache.
     if !no_cache && !ctx.chunks.is_empty() {
@@ -369,6 +391,7 @@ fn handle_query(
     Ok(serde_json::json!({
         "cache_hit": false,
         "chunks": chunks_json,
+        "locator": locator_json,
         "model_router": model_router_json,
         "stats": {
             "context_tokens":    ctx.context_tokens,
@@ -403,6 +426,13 @@ fn handle_index(s: &mut WorkerState, reindex: bool, no_embed: bool) -> Result<Va
 
     let stats =
         index::index_project(&s.project_root, &s.cfg, &mut s.conn).map_err(|e| e.to_string())?;
+    let summary_stats = summarize::sync_project_summaries(
+        &s.project_root,
+        &s.project_paths.summaries_dir(),
+        &s.cfg,
+        &s.conn,
+    )
+    .map_err(|e| e.to_string())?;
 
     if no_embed {
         return Ok(serde_json::json!({
@@ -411,6 +441,13 @@ fn handle_index(s: &mut WorkerState, reindex: bool, no_embed: bool) -> Result<Va
             "unchanged":      stats.unchanged,
             "removed":        stats.removed,
             "chunks_written": stats.chunks_written,
+            "summaries": {
+                "files_seen":       summary_stats.files_seen,
+                "files_written":    summary_stats.file_summaries_written,
+                "modules_written":  summary_stats.module_summaries_written,
+                "project_written":  summary_stats.project_summary_written,
+                "removed":          summary_stats.removed,
+            },
             "embedded":       0,
         }));
     }
@@ -468,6 +505,13 @@ fn handle_index(s: &mut WorkerState, reindex: bool, no_embed: bool) -> Result<Va
         "unchanged":      stats.unchanged,
         "removed":        stats.removed,
         "chunks_written": stats.chunks_written,
+        "summaries": {
+            "files_seen":       summary_stats.files_seen,
+            "files_written":    summary_stats.file_summaries_written,
+            "modules_written":  summary_stats.module_summaries_written,
+            "project_written":  summary_stats.project_summary_written,
+            "removed":          summary_stats.removed,
+        },
         "embedded":       embedded,
     }))
 }
@@ -491,6 +535,32 @@ fn handle_store(s: &WorkerState, query: &str, response: &str) -> Result<Value, S
     .map_err(|e| e.to_string())?;
     let _ = cache::purge_expired(&s.conn);
     Ok(serde_json::json!({ "stored": true }))
+}
+
+fn handle_symbols(
+    s: &WorkerState,
+    name: Option<&str>,
+    kind: Option<&str>,
+    limit: usize,
+) -> Result<Value, String> {
+    let rows = symbols::search(&s.conn, name, kind, limit).map_err(|e| e.to_string())?;
+    let symbols_json: Vec<Value> = rows
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "file": s.file,
+                "name": s.name,
+                "kind": s.kind,
+                "signature": s.signature,
+                "start_line": s.start_line,
+                "end_line": s.end_line,
+                "visibility": s.visibility,
+                "doc": s.doc,
+                "lines": format!("{}-{}", s.start_line, s.end_line),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "symbols": symbols_json }))
 }
 
 // ---------------------------------------------------------------------------

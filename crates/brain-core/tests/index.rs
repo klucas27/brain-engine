@@ -26,7 +26,7 @@ fn setup_project() -> (tempfile::TempDir, ProjectConfig) {
     write(
         root,
         "src/lib.rs",
-        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        "/// Adds two values\npub fn add(a: i32, b: i32) -> i32 { a + b }\npub struct Calculator;\n",
     );
     write(root, "README.md", "# Title\n\nSome docs.\n");
 
@@ -84,6 +84,31 @@ fn first_run_indexes_source_and_skips_secrets_and_binaries() {
     assert!(!path_indexed(&conn, "assets/logo.bin"));
     assert!(!path_indexed(&conn, "brain.config.json"));
     assert!(!path_indexed(&conn, "node_modules/dep/index.js"));
+}
+
+#[test]
+fn indexing_populates_symbols_and_reindex_does_not_duplicate() {
+    let (tmp, cfg) = setup_project();
+    let root = tmp.path();
+
+    run_index(root, &cfg);
+    let conn = db::open(&ProjectPaths::new(root.to_path_buf()).metadata_db()).unwrap();
+    assert_symbol(&conn, "add", "fn", "src/lib.rs");
+    assert_symbol(&conn, "Calculator", "struct", "src/lib.rs");
+    let first_count = symbol_count(&conn, "add");
+
+    drop(conn);
+    write(
+        root,
+        "src/lib.rs",
+        "/// Adds two values\npub fn add(a: i32, b: i32) -> i32 { a + b + 1 }\npub enum Mode { Fast }\n",
+    );
+    run_index(root, &cfg);
+
+    let conn = db::open(&ProjectPaths::new(root.to_path_buf()).metadata_db()).unwrap();
+    assert_eq!(symbol_count(&conn, "add"), first_count);
+    assert_symbol(&conn, "Mode", "enum", "src/lib.rs");
+    assert_eq!(symbol_count(&conn, "Calculator"), 0);
 }
 
 #[test]
@@ -172,4 +197,23 @@ fn path_indexed(conn: &rusqlite::Connection, rel: &str) -> bool {
         })
         .unwrap();
     n == 1
+}
+
+fn symbol_count(conn: &rusqlite::Connection, name: &str) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM symbols WHERE name = ?1", [name], |r| {
+        r.get(0)
+    })
+    .unwrap()
+}
+
+fn assert_symbol(conn: &rusqlite::Connection, name: &str, kind: &str, file: &str) {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM symbols s JOIN files f ON f.id = s.file_id
+             WHERE s.name = ?1 AND s.kind = ?2 AND f.path = ?3",
+            rusqlite::params![name, kind, file],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 1, "expected symbol {kind} {name} in {file}");
 }

@@ -77,6 +77,17 @@ enum Command {
         /// The prompt to classify (quote it if it contains spaces).
         prompt: String,
     },
+    /// Lookup indexed code symbols by name.
+    Symbols {
+        /// Symbol name or substring to search.
+        name: Option<String>,
+        /// Restrict results to a symbol kind (fn, struct, class, const, ...).
+        #[arg(long)]
+        kind: Option<String>,
+        /// Maximum number of results.
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
     /// Inspect and manage the response cache.
     Cache {
         #[command(subcommand)]
@@ -126,6 +137,9 @@ fn main() -> ExitCode {
             no_cache,
         } => commands::query::run(&root, &query, top_k, tokens, cli.json, no_cache),
         Command::Route { prompt } => commands::route::run(&root, &prompt, cli.json),
+        Command::Symbols { name, kind, limit } => {
+            commands::symbols::run(&root, cli.json, name.as_deref(), kind.as_deref(), limit)
+        }
         Command::Cache { action } => commands::cache::run(&root, cli.json, action),
         Command::Daemon { action } => commands::daemon::run(&root, cli.json, action),
         Command::Status => commands::status::run(&root, cli.json),

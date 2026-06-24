@@ -168,6 +168,22 @@ export function store(root, queryText, responseText) {
   return request(root, 'store', { query: queryText, response: responseText });
 }
 
+/**
+ * Lookup indexed code symbols.
+ * @param {string} root
+ * @param {object} [opts]
+ * @param {string|null} [opts.name]
+ * @param {string|null} [opts.kind]
+ * @param {number} [opts.limit=20]
+ */
+export function symbols(root, opts = {}) {
+  return request(root, 'symbols', {
+    name: opts.name ?? null,
+    kind: opts.kind ?? null,
+    limit: opts.limit ?? 20,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Hook helpers (called by the generated .claude/hooks/*.sh scripts)
 // ---------------------------------------------------------------------------
@@ -225,12 +241,47 @@ function formatContext(result) {
   if (result.cache_hit && result.response) {
     return `## Brain Engine — cached answer (additive context)\n\n${result.response}\n`;
   }
+  const locator = formatLocator(result);
   const chunks = Array.isArray(result.chunks) ? result.chunks : [];
-  if (chunks.length === 0) return '';
+  if (chunks.length === 0) return locator;
   const body = chunks
     .map(c => `### ${c.file_path}:${c.start_line}-${c.end_line}\n\`\`\`\n${c.content.trimEnd()}\n\`\`\``)
     .join('\n\n');
-  return `## Brain Engine — retrieved context (additive)\n\n${body}\n`;
+  const retrieved = `## Brain Engine — retrieved context (additive)\n\n${body}\n`;
+  return locator ? `${locator}\n\n${retrieved}` : `${retrieved}\n`;
+}
+
+/** Format the action locator block, when the daemon classified the prompt as an action. */
+function formatLocator(result) {
+  const loc = result && result.locator;
+  if (!loc || !loc.intent || loc.intent.kind !== 'action') return '';
+  const targets = Array.isArray(loc.targets) ? loc.targets : [];
+  const verb = loc.intent.verb || 'action';
+  const targetText = Array.isArray(loc.intent.targets) && loc.intent.targets.length
+    ? loc.intent.targets.slice(0, 6).join(', ')
+    : 'not specified';
+
+  const lines = [
+    '## Brain Engine — locator (for this task)',
+    `Intent: ${verb}. Targets: ${targetText}.`,
+  ];
+
+  if (targets.length > 0) {
+    lines.push('Relevant files:');
+    for (const t of targets) {
+      const line = Number.isFinite(t.line) && t.line > 0 ? `:${t.line}` : '';
+      const why = t.why ? ` -> ${t.why}` : '';
+      lines.push(`  - ${t.file}${line}${why}`);
+    }
+  } else {
+    lines.push('Relevant files: no confident locator target from the current index.');
+  }
+
+  if (loc.inject_directive !== false && targets.length > 0) {
+    lines.push('INSTRUCTION: start from these files. Avoid broad project-wide grep/glob discovery unless these targets are insufficient.');
+  }
+
+  return `${lines.join('\n')}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,8 +362,9 @@ function formatContextEco(result, ultra = false) {
   if (result.cache_hit && result.response) {
     return `[brain:cache] ${result.response.trim()}\n`;
   }
+  const locator = formatLocatorEco(result);
   const chunks = Array.isArray(result.chunks) ? result.chunks : [];
-  if (chunks.length === 0) return '';
+  if (chunks.length === 0) return locator;
   const body = chunks
     .map(c => {
       const header = `[${c.file_path}:${c.start_line}-${c.end_line}]`;
@@ -321,7 +373,25 @@ function formatContextEco(result, ultra = false) {
       return `${header}\n${lines}`;
     })
     .join('\n');
-  return `[brain]\n${body}\n`;
+  const retrieved = `[brain]\n${body}\n`;
+  return locator ? `${locator}\n${retrieved}` : retrieved;
+}
+
+/** Compact locator for eco modes. */
+function formatLocatorEco(result) {
+  const loc = result && result.locator;
+  if (!loc || !loc.intent || loc.intent.kind !== 'action') return '';
+  const targets = Array.isArray(loc.targets) ? loc.targets : [];
+  if (targets.length === 0) return '[brain:locator] action; no confident file target\n';
+  const lines = ['[brain:locator] action targets:'];
+  for (const t of targets) {
+    const line = Number.isFinite(t.line) && t.line > 0 ? `:${t.line}` : '';
+    lines.push(`- ${t.file}${line} (${t.why || 'semantic match'})`);
+  }
+  if (loc.inject_directive !== false) {
+    lines.push('instruction: start here; avoid broad discovery unless needed');
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 // ---------------------------------------------------------------------------
